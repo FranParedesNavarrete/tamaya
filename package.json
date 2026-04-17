@@ -1,0 +1,35 @@
+{
+  "name": "tamaya",
+  "version": "0.1.0-alpha.0",
+  "private": true,
+  "description": "WhatsApp Channels Publisher — PoC. Automatiza WhatsApp Web con Playwright para publicar texto y media en canales (newsletters).",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "login": "tsx src/cli/login.ts",
+    "publish": "tsx src/cli/publish.ts",
+    "stats": "tsx src/cli/stats.ts",
+    "lint": "eslint 'src/**/*.ts'",
+    "format": "prettier --write 'src/**/*.ts'",
+    "install:browsers": "playwright install chromium"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "dotenv": "^16.4.5",
+    "pino": "^9.4.0",
+    "pino-pretty": "^11.2.2",
+    "playwright": "^1.48.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.7.0",
+    "eslint": "^9.12.0",
+    "prettier": "^3.3.3",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2"
+  }
+}

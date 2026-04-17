@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+dist/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# Sessions — contienen storageState de WhatsApp Web. NUNCA subirlos.
+sessions/*.json
+sessions/*/
+!sessions/.gitkeep
+
+# Test assets (media de prueba — se regeneran localmente)
+test-assets/*
+!test-assets/.gitkeep
+
+# Local SQLite
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Claude/Cowork scratch
+.claude/
