@@ -7,8 +7,9 @@ import type { Page } from 'playwright';
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { launchBrowser, openContext, saveSession, sessionExists } from '../browser/session.js';
+import { launchPersistentContextForTenant, sessionExists } from '../browser/session.js';
 import { SELECTORS } from '../browser/selectors.js';
+import { waitForAny } from '../browser/dom-helpers.js';
 import { logger } from '../logger.js';
 
 export type MediaKind = 'image' | 'video' | 'audio' | 'document';
@@ -42,20 +43,18 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
 
   const started = Date.now();
   const mediaSha256 = await sha256OfFile(input.mediaPath);
-  const browser = await launchBrowser();
+  const context = await launchPersistentContextForTenant();
 
   try {
-    const context = await openContext(browser);
-    const page = await context.newPage();
+    const page = context.pages()[0] ?? (await context.newPage());
     await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector(SELECTORS.appReadyMarker, { timeout: 60_000 });
+    await waitForAny(page, SELECTORS.appReady, { timeout: 60_000 });
 
     await navigateToChannel(page, input.channelIdentifier);
     await attachMedia(page, input.mediaPath, input.mediaKind);
     if (input.body) await addCaption(page, input.body);
     await sendAndWait(page);
 
-    await saveSession(context);
     return { success: true, durationMs: Date.now() - started, mediaSha256 };
   } catch (err) {
     logger.error({ err }, 'publishMedia failed');
@@ -66,7 +65,7 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
       error: err instanceof Error ? err.message : String(err),
     };
   } finally {
-    await browser.close();
+    await context.close();
   }
 }
 

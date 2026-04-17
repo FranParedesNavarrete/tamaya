@@ -1,61 +1,54 @@
 /**
- * Gestión de sesión persistente de WhatsApp Web.
+ * Gestión de contexto persistente de WhatsApp Web.
  *
- * En el PoC la sesión vive como JSON plaintext en disco (carpeta `sessions/`).
- * En v1 (Tamaya SaaS) esto se reemplaza por almacenamiento cifrado con KMS.
+ * Usamos `launchPersistentContext` (no `launch` + `newContext`) porque
+ * WhatsApp Web guarda sus tokens en IndexedDB, que storageState NO captura.
+ * El perfil persistente guarda el userDataDir completo de Chromium.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
-import type { Browser, BrowserContext } from 'playwright';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import type { BrowserContext } from 'playwright';
 import { chromium } from 'playwright';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { getBrowserContextOptions } from './fingerprint.js';
 
-export async function launchBrowser(): Promise<Browser> {
-  return chromium.launch({
+export async function launchPersistentContextForTenant(): Promise<BrowserContext> {
+  mkdirSync(config.userDataDir, { recursive: true });
+
+  const options = getBrowserContextOptions();
+  const context = await chromium.launchPersistentContext(config.userDataDir, {
     headless: config.playwright.headless,
     slowMo: config.playwright.slowMoMs,
-    args: [
-      // Estos flags reducen el ruido típico de Playwright en Chromium.
-      '--disable-blink-features=AutomationControlled',
-    ],
+    args: ['--disable-blink-features=AutomationControlled'],
+    // Fingerprint coherente por tenant (viewport, locale, timezone, UA)
+    viewport: options.viewport,
+    locale: options.locale,
+    timezoneId: options.timezoneId,
+    userAgent: options.userAgent,
   });
+
+  logger.info({ userDataDir: config.userDataDir }, 'persistent context opened');
+  return context;
 }
 
 /**
- * Abre un contexto cargando el storageState si existe.
- * Si no existe, crea un contexto vacío — para el flujo de login inicial.
+ * Heurística: consideramos que hay sesión si el userDataDir existe Y contiene
+ * el archivo de IndexedDB de WhatsApp. No es 100% fiable (el perfil podría
+ * estar corrupto), pero sirve como pre-check antes de lanzar el navegador.
  */
-export async function openContext(browser: Browser): Promise<BrowserContext> {
-  const options = getBrowserContextOptions();
-  const hasSession = existsSync(config.sessionPath);
-
-  if (hasSession) {
-    logger.info({ path: config.sessionPath }, 'loading session');
-    return browser.newContext({ ...options, storageState: config.sessionPath });
-  }
-  logger.info('no session found — starting fresh (expect QR)');
-  return browser.newContext(options);
-}
-
-export async function saveSession(context: BrowserContext): Promise<void> {
-  const dir = dirname(config.sessionPath);
-  mkdirSync(dir, { recursive: true });
-  await context.storageState({ path: config.sessionPath });
-  logger.info({ path: config.sessionPath }, 'session saved');
-}
-
 export function sessionExists(): boolean {
-  return existsSync(config.sessionPath);
+  if (!existsSync(config.userDataDir)) return false;
+  // Chromium crea IndexedDB en Default/IndexedDB/... — basta con que exista el dir Default
+  return existsSync(`${config.userDataDir}/Default`);
 }
 
-/** Lee el storageState como objeto (útil para tests / debug). */
-export function readSession(): unknown | null {
-  if (!existsSync(config.sessionPath)) return null;
-  return JSON.parse(readFileSync(config.sessionPath, 'utf-8'));
-}
-
-export function writeSessionRaw(raw: string): void {
-  writeFileSync(config.sessionPath, raw, 'utf-8');
+/**
+ * Borra completamente el perfil (reset total — obliga a volver a escanear QR).
+ * Útil para tests o si la sesión se corrompe.
+ */
+export function wipeSession(): void {
+  if (existsSync(config.userDataDir)) {
+    rmSync(config.userDataDir, { recursive: true, force: true });
+    logger.info({ userDataDir: config.userDataDir }, 'session wiped');
+  }
 }

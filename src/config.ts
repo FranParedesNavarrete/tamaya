@@ -10,7 +10,7 @@ import { z } from 'zod';
 
 const configSchema = z.object({
   tenantId: z.string().min(1),
-  sessionPath: z.string().min(1),
+  userDataDir: z.string().min(1),
 
   fingerprint: z.object({
     userAgent: z.string().min(10),
@@ -53,7 +53,7 @@ function parseIntEnv(v: string | undefined, fallback: number): number {
 
 export const config: Config = configSchema.parse({
   tenantId: process.env.TAMAYA_TENANT_ID ?? 'default',
-  sessionPath: process.env.TAMAYA_SESSION_PATH ?? './sessions/default.json',
+  userDataDir: process.env.TAMAYA_USER_DATA_DIR ?? './sessions/default-profile',
 
   fingerprint: {
     userAgent:

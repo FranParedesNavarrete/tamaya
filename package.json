@@ -11,6 +11,7 @@
     "build": "tsc --noEmit",
     "login": "tsx src/cli/login.ts",
     "publish": "tsx src/cli/publish.ts",
+    "inspect": "tsx src/cli/inspect.ts",
     "stats": "tsx src/cli/stats.ts",
     "lint": "eslint 'src/**/*.ts'",
     "format": "prettier --write 'src/**/*.ts'",

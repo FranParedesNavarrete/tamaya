@@ -33,6 +33,9 @@ logs/
 *.log
 npm-debug.log*
 
+# Debug dumps (screenshot + HTML cuando falla un envío)
+debug/
+
 # Editor
 .vscode/
 .idea/

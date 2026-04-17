@@ -34,14 +34,40 @@ cp .env.example .env
 # 3. Login inicial (abre navegador, escanea QR)
 npm run login
 
-# 4. Publicar un texto (skeleton — aún no funcional, requiere completar Fase 2)
+# 4. Publicar un texto (Fase 2 — implementada, iterar contra selectores reales)
 npm run publish -- --channel "Mi canal de prueba" --text "Hola desde Tamaya"
+# Con invite link (más robusto):
+npm run publish -- -c "Mi canal" -l "https://whatsapp.com/channel/XXXXXXXX" -t "Hola"
 
-# 5. Publicar texto + imagen
+# 5. Publicar texto + imagen (Fase 3 — skeleton, pendiente)
 npm run publish -- -c "Mi canal" -t "Mira esta foto" -m ./test-assets/test.jpg -k image
 
-# 6. Ver estadísticas
+# 6. Abrir el navegador con tu sesión para explorar/inspeccionar selectores
+npm run inspect
+# o dumpear info de un selector concreto:
+npm run inspect -- --dump 'button[aria-label*="Canales" i]'
+
+# 7. Ver estadísticas
 npm run stats
+```
+
+## Debug cuando algo falla
+
+Cada fallo de `publish` guarda automáticamente:
+
+- `debug/<timestamp>_publish-text-fail.png` — screenshot full page
+- `debug/<timestamp>_publish-text-fail.html` — DOM completo
+
+Además, la DB SQLite (`tamaya.db`) registra el intento con `last_error`. Con esos dos artefactos se itera rápido contra `src/browser/selectors.ts`.
+
+Si quieres explorar selectores en vivo con tu sesión cargada:
+
+```bash
+# Abre Chromium no headless; navega a mano con DevTools.
+npm run inspect
+
+# Abre Playwright Inspector para pausar/explorar paso a paso
+PWDEBUG=1 npm run inspect
 ```
 
 ## Estructura del repo
@@ -57,12 +83,13 @@ tamaya/
 │   │   └── selectors.ts       # ← selectores WhatsApp Web centralizados (hotfix vive aquí)
 │   ├── publisher/
 │   │   ├── login.ts           # QR login flow
-│   │   ├── publish-text.ts    # [Fase 2 PoC]
+│   │   ├── publish-text.ts    # Fase 2 PoC ← implementado
 │   │   ├── publish-media.ts   # [Fase 3 PoC]
 │   │   └── verify.ts          # Verificación post-envío [Fase 4 PoC]
 │   ├── cli/
 │   │   ├── login.ts
 │   │   ├── publish.ts
+│   │   ├── inspect.ts         # Sesión interactiva para explorar DOM
 │   │   └── stats.ts
 │   └── db/
 │       ├── schema.sql         # SQLite schema
