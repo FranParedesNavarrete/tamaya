@@ -1,7 +1,7 @@
 /**
  * Cliente SQLite. Inicializa el schema en el primer arranque.
  */
-import Database from 'better-sqlite3';
+import Database, { type Database as DatabaseType } from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,7 @@ import { logger } from '../logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-export const db = new Database(config.dbPath);
+export const db: DatabaseType = new Database(config.dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 

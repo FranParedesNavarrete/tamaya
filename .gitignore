@@ -14,19 +14,25 @@ dist/
 /playwright/.cache/
 
 # Sessions — contienen storageState de WhatsApp Web. NUNCA subirlos.
-sessions/*.json
-sessions/*/
+# Cubre tanto raíz como apps/worker-publish/sessions/.
+sessions/
 !sessions/.gitkeep
+**/sessions/
+!**/sessions/.gitkeep
 
 # Test assets (media de prueba — se regeneran localmente)
 test-assets/*
 !test-assets/.gitkeep
 
-# Local SQLite
+# Local SQLite (incluye sidecar WAL/SHM)
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
 
 # Logs
 logs/
@@ -35,6 +41,12 @@ npm-debug.log*
 
 # Debug dumps (screenshot + HTML cuando falla un envío)
 debug/
+
+# TypeScript build cache
+*.tsbuildinfo
+
+# Legacy artifacts del scaffold inicial
+*.old
 
 # Editor
 .vscode/

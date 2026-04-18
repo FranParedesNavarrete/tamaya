@@ -1,0 +1,30 @@
+services:
+  api:
+    build:
+      target: dev
+    command: npm run dev -w apps/api
+    volumes:
+      - ./apps/api:/app/apps/api
+      - ./packages:/app/packages
+      - /app/node_modules
+    environment:
+      LOG_LEVEL: debug
+
+  worker-resolve:
+    build:
+      target: dev
+    command: npm run dev -w apps/worker-resolve
+    volumes:
+      - ./apps/worker-resolve:/app/apps/worker-resolve
+      - ./packages:/app/packages
+      - /app/node_modules
+
+  web:
+    build:
+      target: dev
+    command: npm run dev -w apps/web -- --host 0.0.0.0
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./apps/web:/app/apps/web
+      - /app/node_modules

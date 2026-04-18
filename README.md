@@ -1,141 +1,244 @@
 # Tamaya
 
-> Publicador de mensajes a canales (newsletters) de WhatsApp. PoC en fase alfa.
-
-Tamaya automatiza WhatsApp Web con Playwright para publicar texto y media (imagen, vídeo, audio, documento) en canales de WhatsApp, cubriendo un hueco que las APIs oficiales no resuelven.
+> Programador y publicador de mensajes (texto + media) para canales de WhatsApp. Automatiza WhatsApp Web con Playwright; cubre un hueco que las APIs oficiales no resuelven.
 
 El nombre es un guiño a *atalaya* (torre de vigía desde la que se lanzan señales).
 
-## Estado
+## ⚠️ Aviso
 
-**Alpha / PoC.** Scaffolding inicial + documentación de diseño. La implementación real del motor de publicación se completa siguiendo las fases de `docs/POC-BACKLOG-whatsapp-channels-publisher.md`.
+Tamaya automatiza WhatsApp Web. Esto **viola los Términos de Servicio de WhatsApp/Meta** y puede resultar en el ban de la cuenta. Úsalo bajo tu responsabilidad y **nunca con tu número personal**. Pensado para un número desechable dedicado.
 
-## ⚠️ Aviso importante
+---
 
-Tamaya automatiza WhatsApp Web. Esto **viola los Términos de Servicio de WhatsApp/Meta** y puede resultar en el ban de la cuenta asociada. Úsalo bajo tu propia responsabilidad y **nunca con tu número personal**. En esta fase alfa no hay todavía ToS del producto ni runbook de respuesta a incidentes: si buscas producir en entorno real, revisa antes `docs/VERIFICATION-REPORT-whatsapp-channels-publisher.md`.
+## Arquitectura
+
+Monorepo con workspaces de npm. Cinco procesos:
+
+| Servicio           | Dónde corre         | Función                                                           |
+| ------------------ | ------------------- | ----------------------------------------------------------------- |
+| `web`              | Docker (Vite+React) | UI para crear canales, programar jobs, ver estado                 |
+| `api`              | Docker (Fastify)    | REST API + BullMQ producer                                        |
+| `worker-resolve`   | Docker (x3 réplicas)| Descarga/resuelve media (S3, HTTP, local) → `/tmp/tamaya-media`   |
+| `worker-publish`   | pm2 **nativo**      | Playwright + Chromium contra WhatsApp Web (1 instancia por cuenta)|
+| `redis`            | Docker              | Backend de BullMQ                                                 |
+| MySQL (AWS RDS)    | Externo             | Persistencia                                                      |
+
+El worker de publish corre **fuera de Docker** porque Chromium dentro de contenedor trae problemas con GPU / persistencia de sesión / fingerprint. Además WA solo tolera una sesión por cuenta → `instances: 1` en pm2.
+
+```
+       ┌──────┐
+       │ web  │
+       └──┬───┘
+          ▼
+       ┌──────┐        ┌────────────────┐
+       │ api  │──push──▶ BullMQ (redis) │
+       └──┬───┘        └──────┬─────────┘
+          │                   │
+          ▼                   ▼
+       ┌─────┐         ┌──────────────────┐        ┌──────────────┐
+       │ RDS │◀────────│ worker-resolve   │───────▶│ /tmp/tamaya- │
+       └──┬──┘         │  (docker x3)     │        │   media/     │
+          │            └──────────────────┘        └──────┬───────┘
+          │                                               │
+          │                                        ┌──────▼───────┐
+          └──requeue───────────────────────────────│ worker-      │
+                                                   │  publish     │
+                                                   │ (pm2 native) │
+                                                   └──────┬───────┘
+                                                          ▼
+                                               WhatsApp Web (Chromium)
+```
+
+---
 
 ## Requisitos
 
-- Node.js ≥ 20
-- macOS / Linux (probado en macOS 14)
-- Un número de WhatsApp **desechable** con un canal de pruebas creado.
+- **Node.js ≥ 20**
+- **Docker Desktop** (con `docker compose`)
+- **macOS o Linux** (probado en macOS 14 / Darwin 25)
+- **Instancia MySQL** accesible (AWS RDS recomendado — también vale local)
+- **Un número de WhatsApp desechable** con un canal de prueba creado
 
-## Quickstart
+---
+
+## Instalación
+
+### 1. Clonar y instalar dependencias
 
 ```bash
-# 1. Instalar dependencias
+git clone https://github.com/FranParedesNavarrete/tamaya.git
+cd tamaya
 npm install
-npm run install:browsers
-
-# 2. Configurar
-cp .env.example .env
-# edita .env si quieres cambiar timezone, user agent, etc.
-
-# 3. Login inicial (abre navegador, escanea QR)
-npm run login
-
-# 4. Publicar un texto (Fase 2 — implementada, iterar contra selectores reales)
-npm run publish -- --channel "Mi canal de prueba" --text "Hola desde Tamaya"
-# Con invite link (más robusto):
-npm run publish -- -c "Mi canal" -l "https://whatsapp.com/channel/XXXXXXXX" -t "Hola"
-
-# 5. Publicar texto + imagen (Fase 3 — skeleton, pendiente)
-npm run publish -- -c "Mi canal" -t "Mira esta foto" -m ./test-assets/test.jpg -k image
-
-# 6. Abrir el navegador con tu sesión para explorar/inspeccionar selectores
-npm run inspect
-# o dumpear info de un selector concreto:
-npm run inspect -- --dump 'button[aria-label*="Canales" i]'
-
-# 7. Ver estadísticas
-npm run stats
+npx playwright install chromium   # solo para worker-publish
 ```
 
-## Debug cuando algo falla
+> El repo tiene `.npmrc` con `legacy-peer-deps=true` para resolver el conflicto de React 19 con algunas deps.
 
-Cada fallo de `publish` guarda automáticamente:
-
-- `debug/<timestamp>_publish-text-fail.png` — screenshot full page
-- `debug/<timestamp>_publish-text-fail.html` — DOM completo
-
-Además, la DB SQLite (`tamaya.db`) registra el intento con `last_error`. Con esos dos artefactos se itera rápido contra `src/browser/selectors.ts`.
-
-Si quieres explorar selectores en vivo con tu sesión cargada:
+### 2. Configurar variables de entorno
 
 ```bash
-# Abre Chromium no headless; navega a mano con DevTools.
-npm run inspect
-
-# Abre Playwright Inspector para pausar/explorar paso a paso
-PWDEBUG=1 npm run inspect
+cp .env.example .env
 ```
+
+Edita `.env` y rellena al menos:
+
+```bash
+# RDS (o MySQL local)
+DATABASE_URL=mysql://user:password@host:3306/tamaya
+
+# S3 (solo si vas a resolver sources s3://... — opcional)
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_REGION=eu-west-1
+
+# El resto trae valores por defecto razonables
+```
+
+El directorio `TAMAYA_TMP_DIR=/tmp/tamaya-media` es **ruta absoluta compartida** entre el `worker-resolve` (Docker, bind-mount) y el `worker-publish` (nativo). No lo cambies a menos que sepas lo que haces.
+
+### 3. Crear el esquema en la BD
+
+Desde el host (usa `drizzle-kit push` contra `DATABASE_URL`):
+
+```bash
+npm run db:push -w @tamaya/db
+```
+
+Esto crea las tablas `jobs`, `channels`, `audit_log`.
+
+### 4. Construir los paquetes compartidos
+
+```bash
+npm run build
+```
+
+### 5. Levantar el stack dockerizado
+
+```bash
+docker compose up -d --build
+```
+
+Esto arranca `redis`, `api`, `worker-resolve` (x3) y `web`.
+
+Comprobación rápida:
+
+```bash
+docker compose ps                   # todos "running / healthy"
+curl http://localhost:3001/health   # api
+open http://localhost               # web
+```
+
+### 6. Login inicial de WhatsApp (una sola vez)
+
+Abre Chromium en tu máquina para escanear el QR de WhatsApp Web. La sesión se persiste en `apps/worker-publish/sessions/default-profile/`.
+
+```bash
+npm run login
+```
+
+Escanea el QR con el móvil de la cuenta desechable. Cuando aparezca la lista de chats, cierra la ventana; la sesión queda guardada.
+
+### 7. Arrancar el worker de publicación con pm2
+
+```bash
+cd apps/worker-publish
+npm run pm2:start
+pm2 logs tamaya-worker-publish   # ver en vivo
+```
+
+Para que arranque en cada reboot del host:
+
+```bash
+pm2 startup     # imprime un comando sudo — ejecútalo
+pm2 save
+```
+
+---
+
+## Uso
+
+1. Abre http://localhost en el navegador.
+2. Crea un canal en **Channels → Nuevo canal** (nombre = el que muestra WA Web, opcional acrónimo).
+3. Ve a **Jobs → Nuevo**:
+   - Selecciona el canal.
+   - Escribe texto (se usa como caption si hay media).
+   - Sube imágenes o vídeos (solo image/* y video/* — WA Channels no acepta documentos).
+   - "Publicar ahora" o programa una fecha.
+4. El job pasa por `pending → resolving → ready → publishing → sent` (o `failed`).
+5. Desde la lista puedes **Reintentar** un job fallido (duplica con nueva fecha), **Cancelar** uno pendiente o **Borrar** uno terminado.
+
+---
+
+## Desarrollo
+
+Modo dev (hot reload en api, web, worker-resolve) gracias al override:
+
+```bash
+docker compose up                   # sin -d, ves logs en vivo
+```
+
+El `worker-publish` se lanza fuera de Docker, en tsx watch:
+
+```bash
+cd apps/worker-publish
+npm run dev
+```
+
+---
+
+## Stack técnico
+
+- **Backend:** TypeScript, Node 20, Fastify, BullMQ, Drizzle ORM, MySQL
+- **Frontend:** React 19, Vite, TailwindCSS, shadcn-style UI
+- **Browser automation:** Playwright (persistent context) contra WhatsApp Web
+- **Media:** `@fastify/multipart` → tmp compartido → resolver (local/S3/HTTP)
+- **Gestión de procesos:** Docker Compose + pm2 para el worker de browser
+
+---
+
+## Troubleshooting
+
+**`DATABASE_URL not set` en worker-publish**
+El worker-publish carga `.env` desde la raíz del repo. Asegúrate de que `/path/to/tamaya/.env` existe y contiene `DATABASE_URL`. Si ejecutas con pm2, el `cwd` es `apps/worker-publish`; el código resuelve `../../../.env`.
+
+**`ENOENT /tmp/tamaya-media/...` en worker-publish**
+El worker-resolve (Docker) escribió el archivo en un volumen que el worker-publish nativo no ve. Comprueba que `TAMAYA_TMP_DIR` es la **misma ruta absoluta** en `.env` y que el bind-mount de `docker-compose.yml` es `${TAMAYA_TMP_DIR}:${TAMAYA_TMP_DIR}`.
+
+**El vídeo se envía sin caption / solo llega el texto**
+El vídeo necesita tiempo para subir. El worker espera hasta ~3 min según tamaño. Revisa los logs de `pm2 logs tamaya-worker-publish` — busca `waiting for upload to complete`.
+
+**"no session found — run npm run login first"**
+La sesión no existe o caducó. Vuelve a ejecutar `npm run login` y escanea el QR.
+
+**WhatsApp Web pide "Vincular un dispositivo" aunque ya escaneaste el QR**
+WA invalida sesiones antiguas. Reescanea; si persiste, borra `apps/worker-publish/sessions/default-profile/` y vuelve a loguear.
+
+**Job en `failed`**
+Mira el campo `lastError` en la tabla (o en la UI) y el screenshot en `apps/worker-publish/debug/`. La mayoría de fallos son por cambios de WA Web — los selectores están centralizados en `packages/core/src/browser/selectors.ts`.
+
+---
 
 ## Estructura del repo
 
 ```
 tamaya/
-├── src/
-│   ├── config.ts              # Carga y valida .env con zod
-│   ├── logger.ts              # Pino
-│   ├── browser/
-│   │   ├── fingerprint.ts     # Huella consistente por tenant
-│   │   ├── session.ts         # launchBrowser, openContext, saveSession
-│   │   └── selectors.ts       # ← selectores WhatsApp Web centralizados (hotfix vive aquí)
-│   ├── publisher/
-│   │   ├── login.ts           # QR login flow
-│   │   ├── publish-text.ts    # Fase 2 PoC ← implementado
-│   │   ├── publish-media.ts   # [Fase 3 PoC]
-│   │   └── verify.ts          # Verificación post-envío [Fase 4 PoC]
-│   ├── cli/
-│   │   ├── login.ts
-│   │   ├── publish.ts
-│   │   ├── inspect.ts         # Sesión interactiva para explorar DOM
-│   │   └── stats.ts
-│   └── db/
-│       ├── schema.sql         # SQLite schema
-│       └── client.ts          # Cliente + audit()
-├── docs/                      # ADR, System Design, PoC Backlog, Verification Report
-├── sessions/                  # storageState de WhatsApp (gitignored — ¡NO commitear!)
-├── test-assets/               # Media de prueba (gitignored)
-├── scripts/                   # Utilidades ad-hoc (vacío por ahora)
-├── .env.example
-├── .gitignore
-├── package.json
-├── tsconfig.json
-└── README.md
+├── apps/
+│   ├── api/              # Fastify REST + BullMQ producer
+│   ├── web/              # Vite + React + shadcn
+│   ├── worker-publish/   # Playwright → WA Web (pm2 native)
+│   └── worker-resolve/   # Descarga media (Docker x3)
+├── packages/
+│   ├── core/             # Lógica de Playwright (selectors, publisher)
+│   ├── db/               # Drizzle schema + client
+│   ├── media-resolver/   # S3 / HTTP / local resolver
+│   └── shared-types/     # Zod schemas compartidos
+├── docker-compose.yml    # Stack base
+├── docker-compose.override.yml  # Modo dev
+└── docs/                 # Notas de diseño y parches
 ```
 
-## Documentación de diseño
-
-Todo el razonamiento técnico del proyecto vive en `docs/`:
-
-- `ADR-001-whatsapp-channels-publisher.md` — decisión de arquitectura.
-- `SYSTEM-DESIGN-whatsapp-channels-publisher.md` — diseño completo del sistema (v1 SaaS).
-- `POC-BACKLOG-whatsapp-channels-publisher.md` — las 6 fases para llevar el PoC a verde.
-- `VERIFICATION-REPORT-whatsapp-channels-publisher.md` — revisión crítica y riesgos abiertos.
-
-Si vas a contribuir, empieza por el PoC Backlog: las tareas están ordenadas por dependencia y cada una tiene criterios de aceptación.
-
-## Hotfix cuando WhatsApp Web cambie
-
-Cuando un envío empiece a fallar consistentemente por cambios en el DOM:
-
-1. Abre `src/browser/selectors.ts` — es el único sitio con selectores.
-2. Lanza `npm run login` en modo inspección (headless=false) y actualiza los selectores afectados.
-3. Sube el `SELECTORS_VERSION` (semver).
-4. Corre el canary (cuando exista) para validar.
-
-## Seguridad (estado actual vs. objetivo)
-
-| Aspecto | PoC (hoy) | v1 (objetivo) |
-|---------|-----------|----------------|
-| Cifrado de sesiones | **No** (plaintext en `sessions/`) | AES-256-GCM con KMS |
-| Multi-tenant | No (1 tenant) | Sí |
-| ToS del producto | No | Sí |
-| Incident runbook | No | Sí |
-
-Nunca commites `sessions/*.json` ni `.env`. El `.gitignore` los excluye — mantenlo así.
+---
 
 ## Licencia
 
-TBD — proyecto privado mientras esté en alpha.
+Uso personal / educativo. No producción sin revisión de ToS.

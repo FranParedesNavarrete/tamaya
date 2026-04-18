@@ -154,6 +154,9 @@ export const SELECTORS = {
   sendButton: [
     'button[aria-label="Enviar"]',
     'button[aria-label="Send"]',
+    // WA Channels media preview usa <div role="button"> en vez de <button>
+    'div[role="button"][aria-label="Enviar"]',
+    'div[role="button"][aria-label="Send"]',
     'span[data-icon="send"]',
     'span[data-icon="wds-ic-send-filled"]',
   ],
@@ -199,22 +202,78 @@ export const SELECTORS = {
     'span[data-icon="clip"]',
   ],
 
+  /**
+   * Item del menú de adjuntar que abre el file picker de "Fotos y vídeos".
+   * CLAVE: clicando ESTE item se dispara el filechooser correcto (no el de sticker).
+   * Verificado 2026-04-18: en WA Channels es un <button role="menuitem"> con el aria-label exacto.
+   */
+  attachMenuPhotosVideos: [
+    'button[role="menuitem"][aria-label="Photos & videos"]',
+    'button[role="menuitem"][aria-label="Fotos y vídeos"]',
+    'button[role="menuitem"][aria-label*="Photos" i]',
+    'button[role="menuitem"][aria-label*="Fotos" i]',
+  ],
+
+  /**
+   * Inputs para fotos y vídeos.
+   * IMPORTANTE: `input[accept="image/*"]` (single, no multiple) es el input DEL STICKER
+   * en WA Channels — si lo usamos, la imagen se envía como sticker. Para fotos/vídeos
+   * reales el input correcto es el genérico `accept="*"` con `multiple`.
+   */
   fileInputImageVideo: [
     'input[type="file"][accept*="image"][accept*="video"]',
-    'input[type="file"][accept*="image"]',
+    'input[type="file"][accept="*"][multiple]',
+    'input[type="file"][multiple]',
   ],
 
   fileInputDocument: [
+    'input[type="file"][accept="*"][multiple]',
     'input[type="file"][accept="*"]',
     'input[type="file"]:not([accept])',
   ],
 
-  mediaPreviewReady: [
-    'div[role="dialog"]:has(video), div[role="dialog"]:has(img)',
-    'div:has(> div > canvas[class*="drawing"])', // WA a veces mete un canvas de anotación
+  /**
+   * Input del sticker (a evitar salvo que quieras enviar sticker).
+   */
+  fileInputSticker: [
+    'input[type="file"][accept="image/*"]:not([multiple])',
+    'input[type="file"][accept="image/*"][accept*="sticker" i]',
   ],
 
+  /**
+   * Preview de media listo.
+   * WA Channels NO usa `role="dialog"`. El preview renderiza un <img alt="Preview">
+   * o <video> con src `blob:`, y aparece el botón Send (div[role="button"]).
+   */
+  mediaPreviewReady: [
+    'img[alt="Preview"][src^="blob:"]',
+    'video[src^="blob:"]',
+    'div[role="button"][aria-label="Send"]',
+    'div[role="button"][aria-label="Enviar"]',
+    'div[role="dialog"]:has(img[src^="blob:"])',
+    'div[role="dialog"]:has(video)',
+  ],
+
+  /**
+   * Sanity-check negativo: si aparece el aria-label "Sticker" tras adjuntar,
+   * WA interpretó el archivo como sticker (¡input equivocado!).
+   */
+  stickerPreviewIndicator: [
+    '[aria-label="Sticker"]',
+    '[aria-label="Pegatina"]',
+  ],
+
+  /**
+   * Input de caption dentro del preview.
+   * En WA Channels el aria-label es "Type an update" / "Añadir actualización".
+   * En chats 1:1 es "caption"/"leyenda"/"pie de foto". Cubrimos ambos.
+   */
   captionInputOnPreview: [
+    'div[contenteditable="true"][role="textbox"][aria-label="Type an update"]',
+    'div[contenteditable="true"][role="textbox"][aria-label*="update" i]',
+    'div[contenteditable="true"][role="textbox"][aria-label*="actualiza" i]',
+    'div[contenteditable="true"][role="textbox"][aria-placeholder="Type an update"]',
+    'div[contenteditable="true"][role="textbox"][aria-placeholder*="update" i]',
     'div[contenteditable="true"][role="textbox"][aria-label*="caption" i]',
     'div[contenteditable="true"][role="textbox"][aria-label*="leyenda" i]',
     'div[contenteditable="true"][role="textbox"][aria-label*="pie" i]',

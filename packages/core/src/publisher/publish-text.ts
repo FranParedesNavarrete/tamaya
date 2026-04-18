@@ -148,9 +148,9 @@ function ensureChannelRow(
 // Navegación al canal
 // ---------------------------------------------------------------------------
 
-async function navigateToChannel(
+export async function navigateToChannel(
   page: Page,
-  ch: PublishTextInput['channelIdentifier'],
+  ch: { inviteLink?: string; whatsappId?: string; name: string },
 ): Promise<void> {
   // Estrategia A: invite link directo (si lo tenemos)
   if (ch.inviteLink) {
