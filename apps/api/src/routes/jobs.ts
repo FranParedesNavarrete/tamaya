@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, gte, lte, like, sql, type SQL } from 'drizzle-orm';
 import { getDb, schema } from '@tamaya/db';
 import { CreateJobSchema } from '@tamaya/shared-types';
 import { enqueueResolve } from '../queue/bullmq.js';
@@ -50,26 +50,35 @@ export async function jobsRoutes(app: FastifyInstance) {
     return { id: jobId, status: 'pending' };
   });
 
-  // GET /jobs — listar con filtros
+  // GET /jobs — listar con filtros + búsqueda
   a.get('/', {
     schema: {
       querystring: z.object({
         status: z.string().optional(),
+        channelId: z.string().uuid().optional(),
+        q: z.string().optional(),
+        from: z.string().datetime().optional(),
+        to: z.string().datetime().optional(),
         limit: z.coerce.number().int().min(1).max(500).default(100),
+        offset: z.coerce.number().int().min(0).default(0),
       }),
     },
   }, async (req) => {
-    const { status, limit } = req.query;
+    const { status, channelId, q, from, to, limit, offset } = req.query;
     const tenantId = 'default';
 
+    const conditions: SQL[] = [eq(schema.jobs.tenantId, tenantId)];
+    if (status) conditions.push(eq(schema.jobs.status, status as any));
+    if (channelId) conditions.push(eq(schema.jobs.channelId, channelId));
+    if (q) conditions.push(like(schema.jobs.text, `%${q}%`));
+    if (from) conditions.push(gte(schema.jobs.scheduledAt, new Date(from)));
+    if (to) conditions.push(lte(schema.jobs.scheduledAt, new Date(to)));
+
     const rows = await db.select().from(schema.jobs)
-      .where(
-        status
-          ? and(eq(schema.jobs.tenantId, tenantId), eq(schema.jobs.status, status as any))
-          : eq(schema.jobs.tenantId, tenantId)
-      )
+      .where(and(...conditions))
       .orderBy(desc(schema.jobs.scheduledAt))
-      .limit(limit);
+      .limit(limit)
+      .offset(offset);
 
     return rows;
   });

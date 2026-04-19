@@ -117,7 +117,7 @@ export function NewJob() {
       </h1>
 
       <div>
-        <Label>Canal *</Label>
+        <Label>Canal<span className="text-destructive ml-0.5">*</span></Label>
         {channels.length === 0 ? (
           <p className="text-sm text-muted-foreground mt-1">
             No hay canales dados de alta.{' '}
@@ -140,7 +140,7 @@ export function NewJob() {
       </div>
 
       <div>
-        <Label>Cuándo publicar *</Label>
+        <Label>Cuándo publicar<span className="text-destructive ml-0.5">*</span></Label>
         <div className="flex items-center gap-2 mt-1">
           <input
             type="checkbox"
