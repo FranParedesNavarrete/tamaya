@@ -6,12 +6,24 @@ import { Button } from '../components/ui/button';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '../components/ui/table';
+import { AlertDialog, ConfirmDialog } from '../components/ui/alert-dialog';
 import { format } from 'date-fns';
+
+interface ConfirmState {
+  title: string;
+  description?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  variant?: 'destructive' | 'default';
+  onConfirm: () => void | Promise<void>;
+}
 
 export function ChannelsList() {
   const nav = useNavigate();
   const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
+  const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   async function load() {
     setChannels(await api.listChannels());
@@ -20,14 +32,23 @@ export function ChannelsList() {
 
   useEffect(() => { load(); }, []);
 
-  async function onDelete(ch: Channel) {
-    if (!confirm(`¿Borrar el canal "${ch.name}"?`)) return;
-    try {
-      await api.deleteChannel(ch.id);
-      await load();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
-    }
+  function onDelete(ch: Channel) {
+    setConfirmState({
+      title: 'Borrar canal',
+      description: `¿Borrar el canal "${ch.name}"?`,
+      confirmLabel: 'Borrar',
+      cancelLabel: 'Cancelar',
+      variant: 'destructive',
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          await api.deleteChannel(ch.id);
+          await load();
+        } catch (err) {
+          setErrorMsg(err instanceof Error ? err.message : String(err));
+        }
+      },
+    });
   }
 
   return (
@@ -75,6 +96,22 @@ export function ChannelsList() {
           </TableBody>
         </Table>
       )}
+
+      <ConfirmDialog
+        open={!!confirmState}
+        title={confirmState?.title ?? ''}
+        description={confirmState?.description}
+        confirmLabel={confirmState?.confirmLabel}
+        cancelLabel={confirmState?.cancelLabel}
+        variant={confirmState?.variant}
+        onConfirm={() => confirmState?.onConfirm()}
+        onCancel={() => setConfirmState(null)}
+      />
+      <AlertDialog
+        open={!!errorMsg}
+        message={errorMsg}
+        onClose={() => setErrorMsg(null)}
+      />
     </div>
   );
 }

@@ -75,7 +75,7 @@ export function ChannelForm() {
       </div>
 
       <div>
-        <Label>Nombre *</Label>
+        <Label>Nombre<span className="text-destructive ml-0.5">*</span></Label>
         <Input value={name} onChange={e => setName(e.target.value)} required
                placeholder="Nombre exacto del canal en WhatsApp" />
       </div>

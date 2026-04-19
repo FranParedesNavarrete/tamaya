@@ -97,17 +97,28 @@ export class MediaResolver {
         throw new Error(`HTTP ${resp.status} fetching ${url}`);
       }
 
+      // Prioridad de extensión:
+      //  1. Derivar de Content-Type (autoritativo, lo envía el servidor)
+      //  2. Extraer del pathname de la URL
+      //  3. Último recurso: .bin (suele causar rechazo por WA Web)
+      // Saber la extensión correcta es CRÍTICO: Playwright infiere el MIME del
+      // archivo por extensión al subirlo, y WA Web rechaza tipos desconocidos.
+      const contentType = resp.headers.get('content-type')?.split(';')[0].trim();
+      const ctExt = contentType ? extensionFromMime(contentType) : undefined;
       const urlExt = extname(new URL(url).pathname);
-      const target = this.targetPathFor(url, urlExt || '.bin');
+      const chosenExt = ctExt || urlExt || '.bin';
+
+      const target = this.targetPathFor(url, chosenExt);
       await mkdir(dirname(target), { recursive: true });
 
       const buf = Buffer.from(await resp.arrayBuffer());
       this.assertSize(buf.byteLength, url);
       await writeFile(target, buf);
 
+      const mime = contentType ?? mimeFromExtension(target);
       return {
         localPath: target,
-        mime: resp.headers.get('content-type') ?? mimeFromExtension(target),
+        mime,
         sizeBytes: buf.byteLength,
         originalSource: url,
       };
@@ -138,25 +149,58 @@ export class MediaResolver {
  */
 function mimeFromExtension(path: string): string | undefined {
   const ext = extname(path).toLowerCase();
-  const map: Record<string, string> = {
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.png': 'image/png',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-    '.bmp': 'image/bmp',
-    '.heic': 'image/heic',
-    '.mp4': 'video/mp4',
-    '.mov': 'video/quicktime',
-    '.webm': 'video/webm',
-    '.mkv': 'video/x-matroska',
-    '.m4v': 'video/x-m4v',
-    '.3gp': 'video/3gpp',
-    '.mp3': 'audio/mpeg',
-    '.ogg': 'audio/ogg',
-    '.wav': 'audio/wav',
-    '.m4a': 'audio/mp4',
-    '.pdf': 'application/pdf',
-  };
-  return map[ext];
+  return EXT_TO_MIME[ext];
 }
+
+/**
+ * Dado un MIME, devuelve la extensión canónica (con punto). Se usa al descargar
+ * desde URLs donde el pathname no tiene extensión útil (CDNs, proxies) —
+ * tomamos la extensión del `Content-Type` para que WA Web y Playwright
+ * reconozcan correctamente el archivo.
+ */
+function extensionFromMime(mime: string): string | undefined {
+  return MIME_TO_EXT[mime.toLowerCase()];
+}
+
+const EXT_TO_MIME: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.heic': 'image/heic',
+  '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.webm': 'video/webm',
+  '.mkv': 'video/x-matroska',
+  '.m4v': 'video/x-m4v',
+  '.3gp': 'video/3gpp',
+  '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
+  '.wav': 'audio/wav',
+  '.m4a': 'audio/mp4',
+  '.pdf': 'application/pdf',
+};
+
+const MIME_TO_EXT: Record<string, string> = {
+  'image/jpeg': '.jpg',
+  'image/jpg': '.jpg',
+  'image/png': '.png',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  'image/bmp': '.bmp',
+  'image/heic': '.heic',
+  'image/heif': '.heic',
+  'video/mp4': '.mp4',
+  'video/quicktime': '.mov',
+  'video/webm': '.webm',
+  'video/x-matroska': '.mkv',
+  'video/x-m4v': '.m4v',
+  'video/3gpp': '.3gp',
+  'audio/mpeg': '.mp3',
+  'audio/ogg': '.ogg',
+  'audio/wav': '.wav',
+  'audio/mp4': '.m4a',
+  'application/pdf': '.pdf',
+};

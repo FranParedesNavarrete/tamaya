@@ -5,6 +5,7 @@ import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-
 import { jobsRoutes } from './routes/jobs.js';
 import { channelsRoutes } from './routes/channels.js';
 import { mediaRoutes } from './routes/media.js';
+import { statsRoutes } from './routes/stats.js';
 import { closeQueue } from './queue/bullmq.js';
 
 async function main() {
@@ -32,6 +33,7 @@ async function main() {
   await app.register(jobsRoutes, { prefix: '/jobs' });
   await app.register(channelsRoutes, { prefix: '/channels' });
   await app.register(mediaRoutes, { prefix: '/media' });
+  await app.register(statsRoutes, { prefix: '/stats' });
 
   const port = Number(process.env.API_PORT ?? 3001);
   await app.listen({ port, host: '0.0.0.0' });

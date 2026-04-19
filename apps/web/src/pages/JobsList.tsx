@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Job } from '@tamaya/shared-types';
 import { Button } from '../components/ui/button';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '../components/ui/table';
+import { AlertDialog, ConfirmDialog } from '../components/ui/alert-dialog';
 import { format } from 'date-fns';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -18,13 +19,26 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: 'bg-gray-400 text-white',
 };
 
+interface ConfirmState {
+  title: string;
+  description?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  variant?: 'destructive' | 'default';
+  onConfirm: () => void | Promise<void>;
+}
+
 export function JobsList() {
   const nav = useNavigate();
+  const [params] = useSearchParams();
+  const statusFilter = params.get('status') ?? undefined;
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
+  const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   async function load() {
-    setJobs(await api.listJobs());
+    setJobs(await api.listJobs(statusFilter ? { status: statusFilter } : undefined));
     setLoading(false);
   }
 
@@ -32,26 +46,45 @@ export function JobsList() {
     load();
     const id = setInterval(load, 5000);
     return () => clearInterval(id);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter]);
 
-  async function onCancel(job: Job) {
-    if (!confirm(`¿Cancelar el job para "${job.channelName}"?`)) return;
-    try {
-      await api.cancelJob(job.id);
-      await load();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
-    }
+  function onCancel(job: Job) {
+    setConfirmState({
+      title: 'Cancelar job',
+      description: `¿Cancelar el job para "${job.channelName}"?`,
+      confirmLabel: 'Cancelar job',
+      cancelLabel: 'Volver',
+      variant: 'default',
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          await api.cancelJob(job.id);
+          await load();
+        } catch (err) {
+          setErrorMsg(err instanceof Error ? err.message : String(err));
+        }
+      },
+    });
   }
 
-  async function onDelete(job: Job) {
-    if (!confirm(`¿Borrar definitivamente este job?`)) return;
-    try {
-      await api.deleteJob(job.id);
-      await load();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
-    }
+  function onDelete(job: Job) {
+    setConfirmState({
+      title: 'Borrar job',
+      description: '¿Borrar definitivamente este job?',
+      confirmLabel: 'Borrar',
+      cancelLabel: 'Cancelar',
+      variant: 'destructive',
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          await api.deleteJob(job.id);
+          await load();
+        } catch (err) {
+          setErrorMsg(err instanceof Error ? err.message : String(err));
+        }
+      },
+    });
   }
 
   const canCancel = (j: Job) => ['pending', 'ready', 'failed'].includes(j.status);
@@ -121,6 +154,22 @@ export function JobsList() {
           </TableBody>
         </Table>
       )}
+
+      <ConfirmDialog
+        open={!!confirmState}
+        title={confirmState?.title ?? ''}
+        description={confirmState?.description}
+        confirmLabel={confirmState?.confirmLabel}
+        cancelLabel={confirmState?.cancelLabel}
+        variant={confirmState?.variant}
+        onConfirm={() => confirmState?.onConfirm()}
+        onCancel={() => setConfirmState(null)}
+      />
+      <AlertDialog
+        open={!!errorMsg}
+        message={errorMsg}
+        onClose={() => setErrorMsg(null)}
+      />
     </div>
   );
 }
