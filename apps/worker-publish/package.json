@@ -1,6 +1,6 @@
 {
   "name": "@tamaya/worker-publish",
-  "version": "0.2.0-alpha.0",
+  "version": "0.3.0",
   "type": "module",
   "main": "./dist/index.js",
   "scripts": {
@@ -8,6 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "login": "tsx src/login.ts",
+    "open": "tsx src/open.ts",
     "pm2:start": "pm2 start ecosystem.config.cjs",
     "pm2:stop": "pm2 stop tamaya-worker-publish",
     "pm2:logs": "pm2 logs tamaya-worker-publish",

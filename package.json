@@ -1,7 +1,7 @@
 {
   "name": "tamaya-monorepo",
   "private": true,
-  "version": "0.2.0-alpha.0",
+  "version": "0.3.0",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -13,6 +13,7 @@
     "dev:worker-publish": "npm run dev -w apps/worker-publish",
     "dev:worker-resolve": "npm run dev -w apps/worker-resolve",
     "login": "npm run login -w apps/worker-publish",
+    "open": "npm run open -w apps/worker-publish",
     "db:push": "npm run db:push -w @tamaya/db",
     "db:studio": "npm run db:studio -w @tamaya/db",
     "stack:up": "docker compose up -d",

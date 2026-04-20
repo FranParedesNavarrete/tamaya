@@ -86,7 +86,7 @@ El worker de publish corre **fuera de Docker** porque Chromium dentro de contene
 | **Docker Compose**         | v2.20  | v5.0 (plugin)    | Se usa la CLI `docker compose …`, no el viejo `docker-compose`. |
 | **MySQL**                  | 8.0    | AWS RDS 8.0.39   | Puede ser local, pero RDS es el camino cómodo.             |
 | **Playwright (Chromium)**  | 1.48   | 1.48             | Se instala con `npx playwright install chromium`.          |
-| **pm2**                    | 5.4    | 5.4              | Se instala automáticamente como dev-dep de `worker-publish`. |
+| **pm2**                    | 5.4    | 5.4              | **Instalar globalmente** (`npm install -g pm2`). Imprescindible para gestionar el worker-publish nativo. |
 
 ### Sistema operativo
 
@@ -122,7 +122,18 @@ Si ya tienes otras versiones, usa [nvm](https://github.com/nvm-sh/nvm):
 nvm install 22 && nvm use 22
 ```
 
-### 2. Instalar Docker Desktop
+### 2. Instalar pm2 globalmente
+
+`pm2` orquesta el `worker-publish` (que corre **fuera de Docker**). Tiene que estar disponible en el `$PATH` del sistema, no solo como dependencia local.
+
+```bash
+npm install -g pm2
+pm2 --version          # >= 5.4
+```
+
+> Si lo instalas solo como `devDependency` del workspace, los comandos `npm run pm2:start`, `pm2 logs`, `pm2 startup`, `pm2 save` fallarán con `command not found` o se ejecutarán contra una instancia distinta y los procesos no quedarán visibles.
+
+### 3. Instalar Docker Desktop
 
 - macOS: [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/)
 - Linux: `curl -fsSL https://get.docker.com | sh`
@@ -136,7 +147,7 @@ docker compose version
 
 **Importante (macOS):** en *Settings → Resources → File sharing*, asegúrate de que `/tmp` es accesible — lo necesitamos para el bind-mount compartido.
 
-### 3. Crear la base de datos
+### 4. Crear la base de datos
 
 **Opción A — AWS RDS MySQL 8** (recomendado):
 
@@ -159,7 +170,7 @@ docker run -d --name mysql-local \
 
 Guarda la URL en formato `mysql://user:password@host:3306/tamaya` — la necesitas en el siguiente paso.
 
-### 4. (Opcional) Credenciales AWS S3
+### 5. (Opcional) Credenciales AWS S3
 
 Solo si vas a publicar media que viva en S3. Configura un IAM user con `s3:GetObject` sobre tus buckets y guarda `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
 
@@ -202,7 +213,28 @@ AWS_REGION=eu-west-1
 
 El resto trae valores por defecto razonables. `TAMAYA_TMP_DIR=/tmp/tamaya-media` es **ruta absoluta compartida** entre el `worker-resolve` (Docker, bind-mount) y el `worker-publish` (nativo) — no la cambies salvo que sepas lo que haces.
 
-### 4. Crear el esquema en la BD
+### 4. Crear el directorio temporal compartido
+
+`worker-resolve` (Docker) y `worker-publish` (nativo) se intercambian los archivos vía un bind-mount sobre `TAMAYA_TMP_DIR`. El directorio **debe existir antes de levantar Docker**, si no, Docker lo crea con `root:root` y el worker nativo no podrá leerlo.
+
+```bash
+sudo mkdir -p /tmp/tamaya-media
+sudo chown -R $(whoami):$(id -gn) /tmp/tamaya-media
+chmod 775 /tmp/tamaya-media
+```
+
+> En **macOS** basta con `mkdir -p /tmp/tamaya-media` (sin sudo, ya eres dueño de `/tmp`).
+>
+> En **Linux**, si cambiaste `TAMAYA_TMP_DIR` a algo en tu `$HOME` (recomendado en servidor para que no se borre en cada reboot), ajusta los paths.
+
+Verifica:
+
+```bash
+ls -ld /tmp/tamaya-media
+# drwxrwxr-x  2 fran fran  64  ...  /tmp/tamaya-media
+```
+
+### 5. Crear el esquema en la BD
 
 ```bash
 npm run db:push
@@ -210,13 +242,13 @@ npm run db:push
 
 Crea las tablas `jobs`, `channels`, `audit_log` vía `drizzle-kit`.
 
-### 5. Construir los paquetes compartidos
+### 6. Construir los paquetes compartidos
 
 ```bash
 npm run build
 ```
 
-### 6. Levantar el stack dockerizado
+### 7. Levantar el stack dockerizado
 
 ```bash
 docker compose up -d --build
@@ -229,10 +261,10 @@ Comprobación rápida:
 ```bash
 docker compose ps                   # todos "running / healthy"
 curl http://localhost:3001/health   # api
-open http://localhost               # web
+open http://localhost:5173          # web
 ```
 
-### 7. Login inicial de WhatsApp (una sola vez)
+### 8. Login inicial de WhatsApp (una sola vez)
 
 Abre Chromium para escanear el QR. La sesión se persiste en `apps/worker-publish/sessions/default-profile/` y se reutiliza en cada ejecución.
 
@@ -242,7 +274,7 @@ npm run login
 
 Escanea con el móvil de la cuenta desechable → cuando veas la lista de chats, cierra la ventana.
 
-### 8. Arrancar el worker de publicación con pm2
+### 9. Arrancar el worker de publicación con pm2
 
 ```bash
 cd apps/worker-publish
@@ -392,6 +424,25 @@ rm -rf apps/worker-publish/sessions/default-profile
 npm run login
 ```
 
+### Abrir el navegador persistido (debug / cambiar idioma / limpiar tips)
+
+`npm run login` se cierra solo en cuanto detecta la app cargada, así que no sirve para operar dentro del perfil. Para eso está `npm run open`:
+
+```bash
+pm2 stop tamaya-worker-publish     # libera el lock del userDataDir
+npm run open                       # abre Chromium con el perfil y se queda
+# (haz lo que tengas que hacer: cambiar Settings → Language a English,
+#  cerrar tooltips, revisar un canal, inspeccionar DOM con DevTools, etc.)
+# Cierra la ventana cuando acabes — el proceso termina solo.
+pm2 start tamaya-worker-publish
+```
+
+Casos típicos:
+
+- **Cambiar el idioma a inglés.** Los selectores del caption de media están en EN + ES. Si WA Web te lo sirvió en otro idioma, pon EN para estar cubierto.
+- **Dismiss de overlays persistentes** ("Prueba el nuevo…", "Vincula tu número…") que tapan la UI.
+- **Inspección visual** del DOM real con DevTools cuando un selector deja de funcionar.
+
 ### Backup mínimo
 
 Lo único irrecuperable son:
@@ -425,13 +476,24 @@ Todo lo demás se reconstruye del repo.
 El worker-publish carga `.env` desde la raíz del repo. Asegúrate de que `/path/to/tamaya/.env` existe y contiene `DATABASE_URL`. Si ejecutas con pm2, el `cwd` es `apps/worker-publish`; el código resuelve `../../../.env`.
 
 **`ENOENT /tmp/tamaya-media/...` en worker-publish**
-El worker-resolve (Docker) escribió el archivo en un volumen que el worker-publish nativo no ve. Comprueba que `TAMAYA_TMP_DIR` es la **misma ruta absoluta** en `.env` y que el bind-mount de `docker-compose.yml` es `${TAMAYA_TMP_DIR}:${TAMAYA_TMP_DIR}`.
+El worker-resolve (Docker) escribió el archivo en un volumen que el worker-publish nativo no ve. Causas habituales:
+1. El directorio no existe → `mkdir -p $TAMAYA_TMP_DIR && chown $(whoami) $TAMAYA_TMP_DIR` (ver paso 4 de Instalación).
+2. `TAMAYA_TMP_DIR` no es la **misma ruta absoluta** en `.env` que el bind-mount de `docker-compose.yml` (debe ser `${TAMAYA_TMP_DIR}:${TAMAYA_TMP_DIR}`).
+3. El directorio existe pero pertenece a `root` (Docker lo creó al arrancar) → `sudo chown -R $(whoami):$(id -gn) $TAMAYA_TMP_DIR`.
 
 **El vídeo se envía sin caption / solo llega el texto**
 El vídeo necesita tiempo para subir. El worker espera hasta ~3 min según tamaño. Revisa los logs de `pm2 logs tamaya-worker-publish` — busca `waiting for upload to complete`.
 
 **"no session found — run npm run login first"**
 La sesión no existe o caducó. Vuelve a ejecutar `npm run login` y escanea el QR.
+
+**El caption del media nunca se escribe → `waitForAny: no selector matched` con `"Type an update"`, `"caption"`, etc.**
+Casi siempre es el **idioma de WhatsApp Web**. Los selectores cubren EN + ES; si tu sesión está en otro idioma, el `aria-label` del textbox de caption no matchea. Solución:
+```bash
+pm2 stop tamaya-worker-publish
+npm run open     # cambia Settings → Language → English en el Chromium que se abre
+pm2 start tamaya-worker-publish
+```
 
 **WhatsApp Web pide "Vincular un dispositivo" aunque ya escaneaste el QR**
 WA invalida sesiones antiguas. Reescanea; si persiste, borra `apps/worker-publish/sessions/default-profile/` y vuelve a loguear.
