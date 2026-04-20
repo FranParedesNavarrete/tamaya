@@ -25,7 +25,10 @@ export default function App() {
     <BrowserRouter>
       <div className="min-h-screen bg-background">
         <nav className="bg-card border-b px-6 py-3 flex justify-between items-center sticky top-0 z-10">
-          <Link to="/" className="font-bold text-xl tracking-tight">Tamaya</Link>
+          <Link to="/" className="flex items-center gap-2 font-bold text-xl tracking-tight">
+            <img src="/favicon.png" alt="" aria-hidden="true" className="h-7 w-7 rounded-md" />
+            <span>Tamaya</span>
+          </Link>
           <div className="flex gap-1">
             <NavItem to="/" icon={<LayoutDashboard className="h-4 w-4" />}>Dashboard</NavItem>
             <NavItem to="/jobs" icon={<ListTodo className="h-4 w-4" />}>Jobs</NavItem>
