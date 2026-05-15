@@ -152,11 +152,18 @@ export const SELECTORS = {
    * Uso: primero tipear, DESPUÉS esperar por este selector.
    */
   sendButton: [
-    'button[aria-label="Enviar"]',
+    // WA Channels media preview usa <div role="button"> y el aria-label
+    // lleva sufijo dinámico: "Send 1 selected", "Send 2 selected", etc.
+    // Por eso usamos prefix-match (^=).
+    'div[role="button"][aria-label^="Send"]',
+    'div[role="button"][aria-label^="Enviar"]',
+    'button[aria-label^="Send"]',
+    'button[aria-label^="Enviar"]',
+    // Compatibilidad con chats normales y versiones viejas del DOM.
     'button[aria-label="Send"]',
-    // WA Channels media preview usa <div role="button"> en vez de <button>
-    'div[role="button"][aria-label="Enviar"]',
+    'button[aria-label="Enviar"]',
     'div[role="button"][aria-label="Send"]',
+    'div[role="button"][aria-label="Enviar"]',
     'span[data-icon="send"]',
     'span[data-icon="wds-ic-send-filled"]',
   ],

@@ -204,14 +204,28 @@ $EDITOR .env
 Valores obligatorios a rellenar:
 
 ```bash
+# URL pública donde se sirve la app — sin puerto, sin slash final.
+# Local:        http://localhost
+# Producción:   https://tamaya.midominio.com
+APP_URL=http://localhost
+
 DATABASE_URL=mysql://user:password@host:3306/tamaya
+
 # S3 solo si vas a resolver s3://... — si no, deja en blanco
 AWS_ACCESS_KEY_ID=
 AWS_SECRET_ACCESS_KEY=
 AWS_REGION=eu-west-1
 ```
 
-El resto trae valores por defecto razonables. `TAMAYA_TMP_DIR=/tmp/tamaya-media` es **ruta absoluta compartida** entre el `worker-resolve` (Docker, bind-mount) y el `worker-publish` (nativo) — no la cambies salvo que sepas lo que haces.
+`APP_URL` se usa para construir `API_CORS_ORIGIN` y el `VITE_API_BASE_URL` de build del frontend — un solo cambio cubre los tres sitios. El resto trae valores por defecto razonables. `TAMAYA_TMP_DIR=/tmp/tamaya-media` es **ruta absoluta compartida** entre el `worker-resolve` (Docker, bind-mount) y el `worker-publish` (nativo) — no la cambies salvo que sepas lo que haces.
+
+> ⚠️ **Si la contraseña de MySQL tiene `$`, `#`, `&`, `*`, `%` u otros símbolos**, **percent-encódalos** antes de ponerla en `DATABASE_URL`. Una sola línea:
+>
+> ```bash
+> node -p 'encodeURIComponent("MI-PASSWORD-CON-SIMBOLOS")'
+> ```
+>
+> Y mete el resultado entre `admin:` y `@`. Recomendación: si puedes, usa una password sin esos caracteres y te ahorras el dolor.
 
 ### 4. Crear el directorio temporal compartido
 
@@ -293,13 +307,19 @@ pm2 save
 
 ## How to use
 
+> **¿Integrando desde otra app?** Tamaya expone una REST API en `http://localhost:3001`. Documentación completa con ejemplos (curl, Node, Python, n8n): **[docs/API.md](docs/API.md)**.
+
 ### Programar un mensaje
 
 1. Abre **http://localhost** → te recibe el **Dashboard**.
 2. Ve a **Canales → + Nuevo canal**. El "Nombre" debe ser **exactamente** el que muestra WA Web (p.ej. `Pruebas n8n`).
 3. Ve a **Jobs → + Nuevo**:
    - **Canal** (requerido).
-   - **Texto** (se envía como caption si hay media).
+   - **Texto** (se envía como caption si hay media). Soporta saltos de línea reales y la sintaxis nativa de WhatsApp:
+     - `*negrita*` → **negrita**
+     - `_cursiva_` → *cursiva*
+     - `~tachado~` → ~~tachado~~
+     - `` `monoespacio` `` para inline; ` ```bloque``` ` para varias líneas.
    - **Media** (opcional): sube archivo, pega URL `https://…` / `s3://…` o una ruta local absoluta. Solo imagen o vídeo — WA Channels no acepta documentos.
    - **Cuándo publicar**: marca "Publicar ahora" o pon fecha/hora.
 4. El job avanza por estados:

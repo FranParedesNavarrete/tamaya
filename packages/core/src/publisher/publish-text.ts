@@ -23,6 +23,7 @@ import {
   dumpDebugInfo,
   humanPause,
   humanType,
+  typeMultiline,
   waitForAny,
   waitForAnyDynamic,
 } from '../browser/dom-helpers.js';
@@ -304,13 +305,15 @@ async function typeAndSend(page: Page, body: string): Promise<void> {
   await composer.click();
   await humanPause(page, [200, 500]);
 
-  // 2. Tipear con pressSequentially (API de Playwright sobre el locator,
-  // garantiza foco y maneja eventos de input correctamente para Lexical)
-  await composer.pressSequentially(body, { delay: 50 });
+  // 2. Tipear preservando saltos de línea con Shift+Enter (un `\n` literal
+  //    enviaría el mensaje a medias en WA Channels).
+  await typeMultiline(page, composer, body, { delayMs: 50 });
 
-  // 3. Verificar que el texto llegó al composer
+  // 3. Verificar que el texto llegó al composer. Normalizamos whitespace
+  //    porque Lexical puede serializar saltos como `\n`, ` `, etc.
   const typed = (await composer.textContent()) ?? '';
-  if (typed.trim() !== body.trim()) {
+  const normalize = (s: string) => s.replace(/\s+/g, ' ').trim();
+  if (normalize(typed) !== normalize(body)) {
     throw new Error(
       `composer text mismatch after typing: expected="${body}" got="${typed}"`,
     );

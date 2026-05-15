@@ -21,6 +21,7 @@ import { SELECTORS } from '../browser/selectors.js';
 import {
   dumpDebugInfo,
   humanPause,
+  typeMultiline,
   waitForAny,
 } from '../browser/dom-helpers.js';
 import { logger } from '../logger.js';
@@ -299,11 +300,13 @@ async function waitForVideoReady(page: Page, sizeMb: number): Promise<void> {
  * el click se pierde y luego no arranca el upload.
  */
 async function waitForSendButtonReady(page: Page, timeoutMs = 30_000): Promise<void> {
+  // El aria-label varía: "Send", "Send 1 selected", "Send 3 selected"…
+  // (Channels media preview). Usamos prefix-match.
   const selectors = [
-    'div[role="button"][aria-label="Send"]:not([aria-disabled="true"])',
-    'div[role="button"][aria-label="Enviar"]:not([aria-disabled="true"])',
-    'button[aria-label="Send"]:not([disabled])',
-    'button[aria-label="Enviar"]:not([disabled])',
+    'div[role="button"][aria-label^="Send"]:not([aria-disabled="true"])',
+    'div[role="button"][aria-label^="Enviar"]:not([aria-disabled="true"])',
+    'button[aria-label^="Send"]:not([disabled])',
+    'button[aria-label^="Enviar"]:not([disabled])',
   ];
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -329,7 +332,9 @@ async function addCaption(page: Page, body: string): Promise<void> {
   });
   await caption.click();
   await humanPause(page, [200, 400]);
-  await caption.pressSequentially(body, { delay: 50 });
+  // typeMultiline preserva saltos de línea con Shift+Enter — sin esto, un
+  // `\n` en el caption enviaría el mensaje a medias en WA Channels.
+  await typeMultiline(page, caption, body, { delayMs: 50 });
   logger.debug({ body }, 'caption typed on preview');
   await humanPause(page, [300, 600]);
 }
@@ -380,56 +385,73 @@ async function assertNotStickerPreview(page: Page): Promise<void> {
 async function sendFromPreview(page: Page): Promise<void> {
   await humanPause(page, [600, 1200]);
 
-  // 1) Selectores priorizados con aria-label (elemento clicable).
-  const primary = [
-    'div[role="button"][aria-label="Send"]',
-    'div[role="button"][aria-label="Enviar"]',
-    'button[aria-label="Send"]',
-    'button[aria-label="Enviar"]',
+  // Scope a la caja del preview: el ancestro más cercano del input "Type an
+  // update" que también contiene un botón Send. Esto evita que clickemos en
+  // un wds-ic-send-filled que esté en otro lado (p. ej. en otro composer
+  // que WA pinte detrás).
+  //
+  // aria-label en WA Channels suele llevar sufijo dinámico: "Send 1 selected".
+  // Usamos starts-with() en XPath y prefix-match en CSS.
+  const previewScope = page.locator(
+    'xpath=//*[.//div[@contenteditable="true" and @aria-label="Type an update"] and .//*[(@role="button" or self::button) and (starts-with(@aria-label, "Send") or starts-with(@aria-label, "Enviar"))]][1]',
+  ).first();
+  const hasScope = (await previewScope.count().catch(() => 0)) > 0;
+  const scope = hasScope ? previewScope : null;
+  if (!hasScope) {
+    logger.warn('preview scope not found — falling back to global search');
+  }
+
+  type Attempt = { sel: string; label: string };
+  const attempts: Attempt[] = [
+    { sel: 'div[role="button"][aria-label^="Send"]', label: 'send' },
+    { sel: 'div[role="button"][aria-label^="Enviar"]', label: 'send-es' },
+    { sel: 'button[aria-label^="Send"]', label: 'send-btn' },
+    { sel: 'button[aria-label^="Enviar"]', label: 'send-btn-es' },
   ];
-  for (const sel of primary) {
-    const loc = page.locator(sel).first();
+  for (const { sel, label } of attempts) {
+    const loc = (scope ?? page).locator(sel).first();
     const cnt = await loc.count().catch(() => 0);
     if (cnt === 0) continue;
     try {
       await loc.click({ timeout: 4_000 });
-      logger.info({ selector: sel }, 'media sent');
+      logger.info({ selector: sel, label, scoped: !!scope }, 'media sent');
       return;
     } catch (err) {
       logger.debug({ selector: sel, err }, 'click failed, trying next');
     }
   }
 
-  // 2) Fallback: encontrar el icono y clicar su ancestro clicable.
-  const iconSelectors = [
-    'span[data-icon="wds-ic-send-filled"]',
-    'span[data-icon="send"]',
-  ];
-  for (const sel of iconSelectors) {
-    const icon = page.locator(sel).first();
-    const cnt = await icon.count().catch(() => 0);
-    if (cnt === 0) continue;
-    try {
-      const clickable = icon.locator(
-        'xpath=ancestor-or-self::*[@role="button" or self::button][1]',
-      ).first();
-      const clickableCnt = await clickable.count().catch(() => 0);
-      if (clickableCnt > 0) {
-        await clickable.click({ timeout: 4_000 });
-      } else {
-        await icon.click({ timeout: 4_000 });
+  // Fallback: localizar el icono dentro del scope (si lo hay) y subir al
+  // ancestro clicable. NUNCA buscar el icono sin scope: ahí está el bug del
+  // falso positivo (puede haber wds-ic-send-filled en otro composer).
+  if (scope) {
+    const iconSelectors = [
+      'span[data-icon="wds-ic-send-filled"]',
+      'span[data-icon="send"]',
+    ];
+    for (const sel of iconSelectors) {
+      const icon = scope.locator(sel).first();
+      const cnt = await icon.count().catch(() => 0);
+      if (cnt === 0) continue;
+      try {
+        const clickable = icon.locator(
+          'xpath=ancestor-or-self::*[@role="button" or self::button][1]',
+        ).first();
+        const clickableCnt = await clickable.count().catch(() => 0);
+        if (clickableCnt > 0) {
+          await clickable.click({ timeout: 4_000 });
+        } else {
+          await icon.click({ timeout: 4_000 });
+        }
+        logger.info({ selector: sel, scoped: true }, 'media sent (icon fallback)');
+        return;
+      } catch (err) {
+        logger.debug({ selector: sel, err }, 'icon click failed, trying next');
       }
-      logger.info({ selector: sel }, 'media sent (icon fallback)');
-      return;
-    } catch (err) {
-      logger.debug({ selector: sel, err }, 'icon click failed, trying next');
     }
   }
 
-  // 3) Último recurso: selector genérico del config.
-  const send = await waitForAny(page, SELECTORS.sendButton, { timeout: 5_000 });
-  await send.click();
-  logger.info('media sent (generic send button)');
+  throw new Error('sendFromPreview: no clickable Send button inside preview overlay');
 }
 
 /**
@@ -460,7 +482,8 @@ async function waitForUploadComplete(
     'waiting for upload to complete',
   );
 
-  const overallDeadline = Date.now() + total;
+  const startedAt = Date.now();
+  const overallDeadline = startedAt + total;
 
   // 1) Preview debe cerrarse. Asignamos hasta el 40% del presupuesto a esta
   //    fase (en la práctica suele cerrarse casi instantáneo tras el click).
@@ -473,7 +496,7 @@ async function waitForUploadComplete(
       state: 'detached',
       timeout: previewDeadline - Date.now(),
     });
-    logger.info({ elapsedMs: Date.now() - (overallDeadline - total) }, 'preview overlay closed');
+    logger.info({ elapsedMs: Date.now() - startedAt }, 'preview overlay closed');
   } catch (err) {
     logger.warn(
       { err: err instanceof Error ? err.message : String(err) },
@@ -481,7 +504,37 @@ async function waitForUploadComplete(
     );
   }
 
-  // 2) Esperar a que NO queden iconos "msg-time" (reloj = subiendo/pendiente).
+  // 2) CRÍTICO: necesitamos PRUEBA de que el envío llegó a iniciarse. Si el
+  //    Send "fantasma" (click en un elemento equivocado) cerró el preview pero
+  //    no encoló nada, NINGÚN indicador aparecerá. Antes el bucle daba esto
+  //    por exitoso ("0 pendientes = ok") — falso positivo flagrante.
+  //
+  //    Esperamos hasta ~15s a que aparezca CUALQUIERA de:
+  //      - msg-time   → mensaje pendiente de subir
+  //      - msg-check  → entregado
+  //      - msg-dblcheck → leído
+  //      - msg-failed o aria-label "Reintentar" → WA mismo reporta fallo
+  //
+  //    Si no aparece ninguno, el "envío" no ocurrió. Throw → job marcado failed.
+  const indicatorSelector =
+    'span[data-icon="msg-time"], span[data-icon="msg-check"], span[data-icon="msg-dblcheck"], span[data-icon="msg-failed"], [aria-label*="Reintentar" i], [aria-label*="Retry" i]';
+  let indicatorAppeared = false;
+  const indicatorDeadline = Date.now() + 15_000;
+  while (Date.now() < indicatorDeadline) {
+    const cnt = await page.locator(indicatorSelector).count().catch(() => 0);
+    if (cnt > 0) {
+      indicatorAppeared = true;
+      break;
+    }
+    await page.waitForTimeout(500);
+  }
+  if (!indicatorAppeared) {
+    throw new Error(
+      'send verification failed: no message indicator appeared after Send click — likely clicked the wrong element',
+    );
+  }
+
+  // 3) Esperar a que NO queden iconos "msg-time" (reloj = subiendo/pendiente).
   //    Log cada 10s con el número de pendientes para poder diagnosticar red lenta.
   let lastLog = Date.now();
   let lastPending = -1;
@@ -495,7 +548,7 @@ async function waitForUploadComplete(
       throw new Error(`upload marked as failed by WhatsApp (retry indicator found)`);
     }
     if (pending === 0) {
-      logger.info({ elapsedMs: Date.now() - (overallDeadline - total) }, 'upload completed — no pending messages');
+      logger.info({ elapsedMs: Date.now() - startedAt }, 'upload completed — no pending messages');
       return;
     }
 

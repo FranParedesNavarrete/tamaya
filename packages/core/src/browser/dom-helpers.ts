@@ -119,3 +119,43 @@ export async function humanPause(
   const ms = lo + Math.floor(Math.random() * (hi - lo));
   await page.waitForTimeout(ms);
 }
+
+/**
+ * Escribe texto multilínea en un contenteditable enfocado (Lexical editor
+ * de WhatsApp Web), preservando saltos de línea.
+ *
+ * Problema que resuelve: `locator.pressSequentially("A\nB", ...)` introduce
+ * un Enter literal entre las líneas, y en WA Channels el Enter ENVÍA el
+ * mensaje. El resultado es que el mensaje se parte en dos.
+ *
+ * Solución: split por `\n`, escribir cada línea con `pressSequentially` y
+ * entre líneas pulsar `Shift+Enter` (que en Lexical inserta un salto de
+ * línea sin disparar el send).
+ *
+ * Compatible con líneas vacías (`A\n\nB`) — entre cada `\n` se mete un
+ * Shift+Enter, así que `A` + Shift+Enter + Shift+Enter + `B` = párrafos
+ * separados con línea en blanco, exactamente como en la entrada original.
+ */
+export async function typeMultiline(
+  _page: Page,
+  locator: Locator,
+  body: string,
+  opts: { delayMs?: number } = {},
+): Promise<void> {
+  const delay = opts.delayMs ?? 50;
+  // Normalizar separadores de línea (Windows / Mac viejos) a `\n`.
+  const lines = body.replace(/\r\n?/g, '\n').split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    if (i > 0) {
+      // Importante: locator.press en lugar de page.keyboard.press para que
+      // el evento se entregue AL composer (re-foca antes). Con keyboard.press
+      // global el foco puede haberse ido a otro sitio y el Shift+Enter no
+      // tendría el efecto esperado dentro del Lexical editor.
+      await locator.press('Shift+Enter');
+    }
+    if (lines[i].length > 0) {
+      await locator.pressSequentially(lines[i], { delay });
+    }
+  }
+}
