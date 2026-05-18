@@ -204,14 +204,28 @@ $EDITOR .env
 Valores obligatorios a rellenar:
 
 ```bash
+# URL pública donde se sirve la app — sin puerto, sin slash final.
+# Local:        http://localhost
+# Producción:   https://tamaya.midominio.com
+APP_URL=http://localhost
+
 DATABASE_URL=mysql://user:password@host:3306/tamaya
+
 # S3 solo si vas a resolver s3://... — si no, deja en blanco
 AWS_ACCESS_KEY_ID=
 AWS_SECRET_ACCESS_KEY=
 AWS_REGION=eu-west-1
 ```
 
-El resto trae valores por defecto razonables. `TAMAYA_TMP_DIR=/tmp/tamaya-media` es **ruta absoluta compartida** entre el `worker-resolve` (Docker, bind-mount) y el `worker-publish` (nativo) — no la cambies salvo que sepas lo que haces.
+`APP_URL` se usa para construir `API_CORS_ORIGIN` y el `VITE_API_BASE_URL` de build del frontend — un solo cambio cubre los tres sitios. El resto trae valores por defecto razonables. `TAMAYA_TMP_DIR=/tmp/tamaya-media` es **ruta absoluta compartida** entre el `worker-resolve` (Docker, bind-mount) y el `worker-publish` (nativo) — no la cambies salvo que sepas lo que haces.
+
+> ⚠️ **Si la contraseña de MySQL tiene `$`, `#`, `&`, `*`, `%` u otros símbolos**, **percent-encódalos** antes de ponerla en `DATABASE_URL`. Una sola línea:
+>
+> ```bash
+> node -p 'encodeURIComponent("MI-PASSWORD-CON-SIMBOLOS")'
+> ```
+>
+> Y mete el resultado entre `admin:` y `@`. Recomendación: si puedes, usa una password sin esos caracteres y te ahorras el dolor.
 
 ### 4. Crear el directorio temporal compartido
 
@@ -293,13 +307,19 @@ pm2 save
 
 ## How to use
 
+> **¿Integrando desde otra app?** Tamaya expone una REST API en `http://localhost:3001`. Documentación completa con ejemplos (curl, Node, Python, n8n): **[docs/API.md](docs/API.md)**.
+
 ### Programar un mensaje
 
 1. Abre **http://localhost** → te recibe el **Dashboard**.
 2. Ve a **Canales → + Nuevo canal**. El "Nombre" debe ser **exactamente** el que muestra WA Web (p.ej. `Pruebas n8n`).
 3. Ve a **Jobs → + Nuevo**:
    - **Canal** (requerido).
-   - **Texto** (se envía como caption si hay media).
+   - **Texto** (se envía como caption si hay media). Soporta saltos de línea reales y la sintaxis nativa de WhatsApp:
+     - `*negrita*` → **negrita**
+     - `_cursiva_` → *cursiva*
+     - `~tachado~` → ~~tachado~~
+     - `` `monoespacio` `` para inline; ` ```bloque``` ` para varias líneas.
    - **Media** (opcional): sube archivo, pega URL `https://…` / `s3://…` o una ruta local absoluta. Solo imagen o vídeo — WA Channels no acepta documentos.
    - **Cuándo publicar**: marca "Publicar ahora" o pon fecha/hora.
 4. El job avanza por estados:
@@ -481,8 +501,24 @@ El worker-resolve (Docker) escribió el archivo en un volumen que el worker-publ
 2. `TAMAYA_TMP_DIR` no es la **misma ruta absoluta** en `.env` que el bind-mount de `docker-compose.yml` (debe ser `${TAMAYA_TMP_DIR}:${TAMAYA_TMP_DIR}`).
 3. El directorio existe pero pertenece a `root` (Docker lo creó al arrancar) → `sudo chown -R $(whoami):$(id -gn) $TAMAYA_TMP_DIR`.
 
-**El vídeo se envía sin caption / solo llega el texto**
-El vídeo necesita tiempo para subir. El worker espera hasta ~3 min según tamaño. Revisa los logs de `pm2 logs tamaya-worker-publish` — busca `waiting for upload to complete`.
+**El vídeo se envía sin caption / solo llega el texto / se cierra el navegador antes de terminar**
+El vídeo necesita tiempo para que WA Web (a) genere el preview, (b) parsee el contenedor y (c) suba el archivo. Los timeouts están **escalados por MB**:
+
+| Etapa          | Vídeo base | Vídeo / MB | Máximo |
+| -------------- | ---------- | ---------- | ------ |
+| Preview load   | 90 s       | +2 s       | 10 min |
+| Metadata ready | 60 s       | +3 s       | 10 min |
+| Upload         | 240 s      | +6 s       | 30 min |
+
+Si aún así un vídeo concreto peta, revisa `pm2 logs tamaya-worker-publish` y busca:
+- `waiting for upload to complete` + `timeoutMin` → ves cuánto se concede.
+- `upload still pending` cada 10s → sabes si avanza o está estancado.
+- `upload marked as failed by WhatsApp (retry indicator found)` → WA rechazó el upload (p. ej. cuota, formato, red).
+
+Para comprimir un vídeo antes de enviarlo (Mac):
+```bash
+ffmpeg -i input.mp4 -vcodec libx264 -crf 28 -preset fast -acodec aac output.mp4
+```
 
 **"no session found — run npm run login first"**
 La sesión no existe o caducó. Vuelve a ejecutar `npm run login` y escanea el QR.

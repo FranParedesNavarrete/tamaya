@@ -3,6 +3,8 @@ import type {
   Channel, CreateChannelInput, UpdateChannelInput,
 } from '@tamaya/shared-types';
 
+// VITE_API_BASE_URL se inyecta en build a partir de APP_URL:API_PORT en
+// docker-compose.yml. Fallback a localhost para dev fuera de Docker.
 const BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {

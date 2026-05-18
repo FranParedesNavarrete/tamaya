@@ -21,6 +21,7 @@ import { SELECTORS } from '../browser/selectors.js';
 import {
   dumpDebugInfo,
   humanPause,
+  typeMultiline,
   waitForAny,
 } from '../browser/dom-helpers.js';
 import { logger } from '../logger.js';
@@ -47,6 +48,54 @@ export interface PublishResult {
   debugDump?: string;
 }
 
+/**
+ * Timeouts escalados por tamaño del archivo.
+ *
+ * El problema con timeouts fijos es que un vídeo de 30s (~10 MB) y uno de
+ * 3 min (~200 MB) tardan órdenes de magnitud distintos en:
+ *   1. generar preview (WA parsea el contenedor en cliente),
+ *   2. tener metadata disponible (readyState >= 1),
+ *   3. subirse al servidor.
+ *
+ * Para cada etapa definimos (base + perMbMs * size) con un máximo duro para
+ * que un error real no nos cuelgue para siempre.
+ */
+interface TimeoutSpec {
+  baseMs: number;
+  perMbMs: number;
+  maxMs: number;
+}
+
+const TIMEOUTS: Record<MediaKind, { preview: TimeoutSpec; upload: TimeoutSpec }> & {
+  videoReady: TimeoutSpec;
+} = {
+  image: {
+    preview: { baseMs: 25_000, perMbMs: 500, maxMs: 120_000 },
+    upload: { baseMs: 60_000, perMbMs: 1_500, maxMs: 300_000 },
+  },
+  video: {
+    // Preview: WA Web tiene que decodificar el container y sacar el primer frame.
+    // Un vídeo grande puede tardar bastante aunque todavía no haya empezado a subir.
+    preview: { baseMs: 90_000, perMbMs: 2_000, maxMs: 600_000 /* 10 min */ },
+    // Upload: lo más lento. En red doméstica española típica (~10-20 Mbps subida),
+    // 100 MB tardan 40-80 s. Añadimos margen 3x para cuando haya congestión.
+    upload: { baseMs: 240_000, perMbMs: 6_000, maxMs: 1_800_000 /* 30 min */ },
+  },
+  audio: {
+    preview: { baseMs: 45_000, perMbMs: 1_500, maxMs: 300_000 },
+    upload: { baseMs: 120_000, perMbMs: 4_000, maxMs: 600_000 },
+  },
+  document: {
+    preview: { baseMs: 25_000, perMbMs: 500, maxMs: 180_000 },
+    upload: { baseMs: 90_000, perMbMs: 3_000, maxMs: 600_000 },
+  },
+  videoReady: { baseMs: 60_000, perMbMs: 3_000, maxMs: 600_000 },
+};
+
+function scaledTimeout(spec: TimeoutSpec, sizeMb: number): number {
+  return Math.min(spec.maxMs, spec.baseMs + Math.ceil(sizeMb * spec.perMbMs));
+}
+
 export async function publishMedia(input: PublishMediaInput): Promise<PublishResult> {
   if (!sessionExists()) {
     return {
@@ -57,7 +106,14 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
   }
 
   const started = Date.now();
+  const fileStat = await stat(input.mediaPath);
+  const sizeMb = fileStat.size / (1024 * 1024);
   const mediaSha256 = await sha256OfFile(input.mediaPath);
+  logger.info(
+    { kind: input.mediaKind, sizeMb: sizeMb.toFixed(2), sizeBytes: fileStat.size },
+    'publishMedia start',
+  );
+
   const context = await launchPersistentContextForTenant();
   let debugDump: string | undefined;
 
@@ -69,7 +125,7 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
     await navigateToChannel(page, input.channelIdentifier);
 
     await attachMedia(page, input.mediaPath, input.mediaKind);
-    await waitForMediaPreview(page, input.mediaKind);
+    await waitForMediaPreview(page, input.mediaKind, sizeMb);
     await assertNotStickerPreview(page);
 
     // Escribimos el caption YA (mientras el vídeo sigue cargando). Así el
@@ -79,14 +135,16 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
     if (input.body) await addCaption(page, input.body);
 
     // Para vídeo, esperamos a que esté listo ANTES de clicar Send.
-    if (input.mediaKind === 'video') await waitForVideoReady(page);
+    if (input.mediaKind === 'video') await waitForVideoReady(page, sizeMb);
 
+    // Verificar que el Send está realmente clickable antes de pulsarlo.
+    await waitForSendButtonReady(page);
     await sendFromPreview(page);
 
     // Esperar a que el upload termine: el preview debe cerrarse Y la burbuja
     // del mensaje debe aparecer en el hilo con el tick (msg-check / msg-dblcheck
     // / msg-time). Si cerramos el contexto antes, cancelamos el upload.
-    await waitForUploadComplete(page, input.mediaPath, input.mediaKind);
+    await waitForUploadComplete(page, input.mediaKind, sizeMb);
 
     return { success: true, durationMs: Date.now() - started, mediaSha256 };
   } catch (err) {
@@ -192,10 +250,13 @@ async function attachMedia(page: Page, path: string, kind: MediaKind): Promise<v
  * generar el thumbnail inicial. Pero tras aparecer, el caption ya puede
  * escribirse aunque el vídeo siga cargando.
  */
-async function waitForMediaPreview(page: Page, kind: MediaKind): Promise<void> {
-  const timeout =
-    kind === 'video' ? 120_000 : kind === 'audio' ? 60_000 : 25_000;
-  logger.info({ kind, timeout }, 'waiting for media preview');
+async function waitForMediaPreview(
+  page: Page,
+  kind: MediaKind,
+  sizeMb: number,
+): Promise<void> {
+  const timeout = scaledTimeout(TIMEOUTS[kind].preview, sizeMb);
+  logger.info({ kind, sizeMb: sizeMb.toFixed(2), timeoutMs: timeout }, 'waiting for media preview');
   await waitForAny(page, SELECTORS.mediaPreviewReady, { timeout });
   await humanPause(page, [500, 900]);
   logger.info('media preview ready');
@@ -206,24 +267,59 @@ async function waitForMediaPreview(page: Page, kind: MediaKind): Promise<void> {
  * conocida). Se llama ANTES de `sendFromPreview` y DESPUÉS de escribir el
  * caption — así el caption ya está persistido en el DOM cuando WA termina
  * de procesar el vídeo.
+ *
+ * Timeout escalado por tamaño: vídeos grandes (>100 MB) necesitan bastante
+ * más de los 60s que había fijados antes — WA Web parsea el contenedor
+ * entero en cliente antes de exponer `readyState >= 1`.
  */
-async function waitForVideoReady(page: Page): Promise<void> {
+async function waitForVideoReady(page: Page, sizeMb: number): Promise<void> {
+  const timeout = scaledTimeout(TIMEOUTS.videoReady, sizeMb);
+  logger.info({ sizeMb: sizeMb.toFixed(2), timeoutMs: timeout }, 'waiting for video metadata');
   try {
     await page.waitForFunction(
       `(() => {
         const v = document.querySelector('video[src^="blob:"]');
-        return !!v && v.readyState >= 1 && !isNaN(v.duration);
+        return !!v && v.readyState >= 1 && !isNaN(v.duration) && v.duration > 0;
       })()`,
       undefined,
-      { timeout: 60_000 },
+      { timeout },
     );
     logger.info('video metadata loaded');
   } catch (err) {
     logger.warn(
-      { err: err instanceof Error ? err.message : String(err) },
+      { err: err instanceof Error ? err.message : String(err), timeoutMs: timeout },
       'video metadata not confirmed — continuing anyway',
     );
   }
+}
+
+/**
+ * Espera a que el botón Send esté disponible y no deshabilitado. Para vídeos
+ * grandes, WA Web renderiza el botón en un estado no-clickable (aria-disabled
+ * o display:none) hasta que el procesado local termina. Si clicamos antes,
+ * el click se pierde y luego no arranca el upload.
+ */
+async function waitForSendButtonReady(page: Page, timeoutMs = 30_000): Promise<void> {
+  // El aria-label varía: "Send", "Send 1 selected", "Send 3 selected"…
+  // (Channels media preview). Usamos prefix-match.
+  const selectors = [
+    'div[role="button"][aria-label^="Send"]:not([aria-disabled="true"])',
+    'div[role="button"][aria-label^="Enviar"]:not([aria-disabled="true"])',
+    'button[aria-label^="Send"]:not([disabled])',
+    'button[aria-label^="Enviar"]:not([disabled])',
+  ];
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const sel of selectors) {
+      const visible = await page.locator(sel).first().isVisible().catch(() => false);
+      if (visible) {
+        logger.debug({ selector: sel }, 'send button is ready');
+        return;
+      }
+    }
+    await page.waitForTimeout(500);
+  }
+  logger.warn({ timeoutMs }, 'send button readiness not confirmed — trying to click anyway');
 }
 
 /**
@@ -236,7 +332,9 @@ async function addCaption(page: Page, body: string): Promise<void> {
   });
   await caption.click();
   await humanPause(page, [200, 400]);
-  await caption.pressSequentially(body, { delay: 50 });
+  // typeMultiline preserva saltos de línea con Shift+Enter — sin esto, un
+  // `\n` en el caption enviaría el mensaje a medias en WA Channels.
+  await typeMultiline(page, caption, body, { delayMs: 50 });
   logger.debug({ body }, 'caption typed on preview');
   await humanPause(page, [300, 600]);
 }
@@ -287,56 +385,73 @@ async function assertNotStickerPreview(page: Page): Promise<void> {
 async function sendFromPreview(page: Page): Promise<void> {
   await humanPause(page, [600, 1200]);
 
-  // 1) Selectores priorizados con aria-label (elemento clicable).
-  const primary = [
-    'div[role="button"][aria-label="Send"]',
-    'div[role="button"][aria-label="Enviar"]',
-    'button[aria-label="Send"]',
-    'button[aria-label="Enviar"]',
+  // Scope a la caja del preview: el ancestro más cercano del input "Type an
+  // update" que también contiene un botón Send. Esto evita que clickemos en
+  // un wds-ic-send-filled que esté en otro lado (p. ej. en otro composer
+  // que WA pinte detrás).
+  //
+  // aria-label en WA Channels suele llevar sufijo dinámico: "Send 1 selected".
+  // Usamos starts-with() en XPath y prefix-match en CSS.
+  const previewScope = page.locator(
+    'xpath=//*[.//div[@contenteditable="true" and @aria-label="Type an update"] and .//*[(@role="button" or self::button) and (starts-with(@aria-label, "Send") or starts-with(@aria-label, "Enviar"))]][1]',
+  ).first();
+  const hasScope = (await previewScope.count().catch(() => 0)) > 0;
+  const scope = hasScope ? previewScope : null;
+  if (!hasScope) {
+    logger.warn('preview scope not found — falling back to global search');
+  }
+
+  type Attempt = { sel: string; label: string };
+  const attempts: Attempt[] = [
+    { sel: 'div[role="button"][aria-label^="Send"]', label: 'send' },
+    { sel: 'div[role="button"][aria-label^="Enviar"]', label: 'send-es' },
+    { sel: 'button[aria-label^="Send"]', label: 'send-btn' },
+    { sel: 'button[aria-label^="Enviar"]', label: 'send-btn-es' },
   ];
-  for (const sel of primary) {
-    const loc = page.locator(sel).first();
+  for (const { sel, label } of attempts) {
+    const loc = (scope ?? page).locator(sel).first();
     const cnt = await loc.count().catch(() => 0);
     if (cnt === 0) continue;
     try {
       await loc.click({ timeout: 4_000 });
-      logger.info({ selector: sel }, 'media sent');
+      logger.info({ selector: sel, label, scoped: !!scope }, 'media sent');
       return;
     } catch (err) {
       logger.debug({ selector: sel, err }, 'click failed, trying next');
     }
   }
 
-  // 2) Fallback: encontrar el icono y clicar su ancestro clicable.
-  const iconSelectors = [
-    'span[data-icon="wds-ic-send-filled"]',
-    'span[data-icon="send"]',
-  ];
-  for (const sel of iconSelectors) {
-    const icon = page.locator(sel).first();
-    const cnt = await icon.count().catch(() => 0);
-    if (cnt === 0) continue;
-    try {
-      const clickable = icon.locator(
-        'xpath=ancestor-or-self::*[@role="button" or self::button][1]',
-      ).first();
-      const clickableCnt = await clickable.count().catch(() => 0);
-      if (clickableCnt > 0) {
-        await clickable.click({ timeout: 4_000 });
-      } else {
-        await icon.click({ timeout: 4_000 });
+  // Fallback: localizar el icono dentro del scope (si lo hay) y subir al
+  // ancestro clicable. NUNCA buscar el icono sin scope: ahí está el bug del
+  // falso positivo (puede haber wds-ic-send-filled en otro composer).
+  if (scope) {
+    const iconSelectors = [
+      'span[data-icon="wds-ic-send-filled"]',
+      'span[data-icon="send"]',
+    ];
+    for (const sel of iconSelectors) {
+      const icon = scope.locator(sel).first();
+      const cnt = await icon.count().catch(() => 0);
+      if (cnt === 0) continue;
+      try {
+        const clickable = icon.locator(
+          'xpath=ancestor-or-self::*[@role="button" or self::button][1]',
+        ).first();
+        const clickableCnt = await clickable.count().catch(() => 0);
+        if (clickableCnt > 0) {
+          await clickable.click({ timeout: 4_000 });
+        } else {
+          await icon.click({ timeout: 4_000 });
+        }
+        logger.info({ selector: sel, scoped: true }, 'media sent (icon fallback)');
+        return;
+      } catch (err) {
+        logger.debug({ selector: sel, err }, 'icon click failed, trying next');
       }
-      logger.info({ selector: sel }, 'media sent (icon fallback)');
-      return;
-    } catch (err) {
-      logger.debug({ selector: sel, err }, 'icon click failed, trying next');
     }
   }
 
-  // 3) Último recurso: selector genérico del config.
-  const send = await waitForAny(page, SELECTORS.sendButton, { timeout: 5_000 });
-  await send.click();
-  logger.info('media sent (generic send button)');
+  throw new Error('sendFromPreview: no clickable Send button inside preview overlay');
 }
 
 /**
@@ -345,35 +460,43 @@ async function sendFromPreview(page: Page): Promise<void> {
  * WA Web hace el upload tras clicar Send; si cerramos el contexto demasiado
  * pronto, el request se cancela y el mensaje no llega nunca.
  *
- * Criterio de éxito:
- *  1. El preview overlay se cierra (img[alt="Preview"] desaparece).
- *  2. No hay icono "msg-time" (reloj) visible — significa que ningún mensaje
- *     está pendiente de subir.
+ * Etapas observables:
+ *  1. Preview overlay se cierra → WA ha aceptado el envío localmente.
+ *  2. Aparece burbuja en el hilo con icono "msg-time" (reloj = subiendo).
+ *  3. El reloj desaparece → el mensaje está entregado (check / doble check).
  *
- * Timeout por tipo de media (vídeos tardan más): ajustado al tamaño del archivo
- * con un mínimo generoso.
+ * Para vídeos grandes (p. ej. >100 MB) los pasos 1 y 3 pueden tardar varios
+ * minutos. Cada etapa tiene su propio deadline basado en el tamaño.
+ *
+ * Además instrumentamos con logs cada 10s para saber dónde se queda el
+ * proceso si falla.
  */
 async function waitForUploadComplete(
   page: Page,
-  mediaPath: string,
   kind: MediaKind,
+  sizeMb: number,
 ): Promise<void> {
-  // Timeout base por tipo + ~1s por MB (muy conservador para conexiones lentas).
-  const { size } = await stat(mediaPath).catch(() => ({ size: 0 } as { size: number }));
-  const perMbMs = 1_500;
-  const sizeMb = size / (1024 * 1024);
-  const base =
-    kind === 'video' ? 180_000 : kind === 'audio' ? 90_000 : 30_000;
-  const total = Math.min(600_000, base + Math.ceil(sizeMb) * perMbMs);
-  logger.info({ kind, sizeMb: sizeMb.toFixed(2), timeout: total }, 'waiting for upload to complete');
+  const total = scaledTimeout(TIMEOUTS[kind].upload, sizeMb);
+  logger.info(
+    { kind, sizeMb: sizeMb.toFixed(2), timeoutMs: total, timeoutMin: (total / 60_000).toFixed(1) },
+    'waiting for upload to complete',
+  );
 
-  // 1) Preview debe cerrarse.
+  const startedAt = Date.now();
+  const overallDeadline = startedAt + total;
+
+  // 1) Preview debe cerrarse. Asignamos hasta el 40% del presupuesto a esta
+  //    fase (en la práctica suele cerrarse casi instantáneo tras el click).
+  const previewDeadline = Math.min(
+    overallDeadline,
+    Date.now() + Math.max(60_000, Math.floor(total * 0.4)),
+  );
   try {
     await page.waitForSelector('img[alt="Preview"], video[src^="blob:"]', {
       state: 'detached',
-      timeout: total,
+      timeout: previewDeadline - Date.now(),
     });
-    logger.debug('preview overlay closed');
+    logger.info({ elapsedMs: Date.now() - startedAt }, 'preview overlay closed');
   } catch (err) {
     logger.warn(
       { err: err instanceof Error ? err.message : String(err) },
@@ -381,20 +504,66 @@ async function waitForUploadComplete(
     );
   }
 
-  // 2) Esperar a que NO queden iconos "msg-time" (reloj = subiendo/pendiente).
-  const deadline = Date.now() + total;
-  while (Date.now() < deadline) {
-    const pending = await page
-      .locator('span[data-icon="msg-time"]')
-      .count()
-      .catch(() => 0);
-    if (pending === 0) {
-      logger.info('upload completed — no pending messages');
-      return;
+  // 2) CRÍTICO: necesitamos PRUEBA de que el envío llegó a iniciarse. Si el
+  //    Send "fantasma" (click en un elemento equivocado) cerró el preview pero
+  //    no encoló nada, NINGÚN indicador aparecerá. Antes el bucle daba esto
+  //    por exitoso ("0 pendientes = ok") — falso positivo flagrante.
+  //
+  //    Esperamos hasta ~15s a que aparezca CUALQUIERA de:
+  //      - msg-time   → mensaje pendiente de subir
+  //      - msg-check  → entregado
+  //      - msg-dblcheck → leído
+  //      - msg-failed o aria-label "Reintentar" → WA mismo reporta fallo
+  //
+  //    Si no aparece ninguno, el "envío" no ocurrió. Throw → job marcado failed.
+  const indicatorSelector =
+    'span[data-icon="msg-time"], span[data-icon="msg-check"], span[data-icon="msg-dblcheck"], span[data-icon="msg-failed"], [aria-label*="Reintentar" i], [aria-label*="Retry" i]';
+  let indicatorAppeared = false;
+  const indicatorDeadline = Date.now() + 15_000;
+  while (Date.now() < indicatorDeadline) {
+    const cnt = await page.locator(indicatorSelector).count().catch(() => 0);
+    if (cnt > 0) {
+      indicatorAppeared = true;
+      break;
     }
-    logger.debug({ pending }, 'upload still pending');
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(500);
+  }
+  if (!indicatorAppeared) {
+    throw new Error(
+      'send verification failed: no message indicator appeared after Send click — likely clicked the wrong element',
+    );
   }
 
-  logger.warn('upload did not complete within timeout — closing anyway');
+  // 3) Esperar a que NO queden iconos "msg-time" (reloj = subiendo/pendiente).
+  //    Log cada 10s con el número de pendientes para poder diagnosticar red lenta.
+  let lastLog = Date.now();
+  let lastPending = -1;
+  while (Date.now() < overallDeadline) {
+    const [pending, failed] = await Promise.all([
+      page.locator('span[data-icon="msg-time"]').count().catch(() => 0),
+      page.locator('span[data-icon="msg-failed"], [aria-label*="Retry" i], [aria-label*="Reintentar" i]').count().catch(() => 0),
+    ]);
+
+    if (failed > 0) {
+      throw new Error(`upload marked as failed by WhatsApp (retry indicator found)`);
+    }
+    if (pending === 0) {
+      logger.info({ elapsedMs: Date.now() - startedAt }, 'upload completed — no pending messages');
+      return;
+    }
+
+    // Log periódico de progreso (cada 10s o cuando cambie el número de pendientes).
+    if (pending !== lastPending || Date.now() - lastLog > 10_000) {
+      const remainingMs = overallDeadline - Date.now();
+      logger.info(
+        { pending, remainingSec: Math.round(remainingMs / 1000) },
+        'upload still pending',
+      );
+      lastPending = pending;
+      lastLog = Date.now();
+    }
+    await page.waitForTimeout(2000);
+  }
+
+  logger.warn({ timeoutMs: total }, 'upload did not complete within timeout — closing anyway');
 }
