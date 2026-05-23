@@ -90,8 +90,8 @@ El worker de publish corre **fuera de Docker** porque Chromium dentro de contene
 
 ### Sistema operativo
 
-- **macOS** (Intel o Apple Silicon) — probado en 14 Sonoma / Darwin 25.
-- **Linux** (Ubuntu 22.04, Debian 12, Fedora 40) — debería funcionar igual.
+- **macOS** (Intel o Apple Silicon) — el camino más directo; el QR de WhatsApp se escanea localmente.
+- **Linux server** (Ubuntu 22.04 / Debian 12 recomendados) — soportado, pero hay dos detalles propios: dependencias nativas de Chromium y cómo escanear el QR sin pantalla. Ver sección "[Despliegue en servidor Linux](#despliegue-en-servidor-linux-headless)" más abajo.
 - **Windows** — no soportado directamente; usa WSL2.
 
 ### Cuenta / acceso externo
@@ -302,6 +302,98 @@ Para que arranque al reboot:
 pm2 startup     # imprime un sudo — ejecútalo
 pm2 save
 ```
+
+---
+
+## Despliegue en servidor Linux (headless)
+
+El flujo en macOS es directo porque el QR de WhatsApp se escanea con una ventana real. En un servidor Linux sin pantalla hay tres detalles extra:
+
+### A. Dependencias de sistema para Chromium
+
+Playwright no trae las libs nativas que macOS sí incluye:
+
+```bash
+sudo apt update
+sudo apt install -y curl build-essential
+sudo npx playwright install-deps chromium     # libnss3, libatk-bridge2.0-0, ...
+```
+
+### B. Sesión de WhatsApp sin pantalla
+
+`npm run login` abre Chromium en modo headful y no hay forma de escanear el QR en un servidor sin display. Las dos rutas viables:
+
+**Opción 1 — Login en una máquina con pantalla y sincronizar (recomendado):**
+
+```bash
+# En tu Mac/laptop:
+git clone … && cd tamaya && npm install && npm run login
+# Escanea el QR, espera a ver la lista de canales, cierra la ventana.
+
+# Copia la sesión al server:
+rsync -avz apps/worker-publish/sessions/default-profile/ \
+  usuario@server:/ruta/a/tamaya/apps/worker-publish/sessions/default-profile/
+```
+
+Si has copiado con `sudo rsync` revisa el owner:
+
+```bash
+sudo chown -R $USER:$USER apps/worker-publish/sessions
+```
+
+**Opción 2 — Xvfb + VNC** (display virtual). Más complicado, solo si no tienes acceso a una segunda máquina:
+
+```bash
+sudo apt install -y xvfb x11vnc
+# Lanza display virtual:
+Xvfb :99 -screen 0 1440x900x24 &
+export DISPLAY=:99
+x11vnc -display :99 -bg -nopw -listen 127.0.0.1 -xkb &
+# Reenvía VNC por SSH desde tu Mac: ssh -L 5900:127.0.0.1:5900 server
+# Conecta con cualquier cliente VNC al localhost:5900
+DISPLAY=:99 npm run login
+```
+
+### C. pm2 + systemd para auto-start
+
+```bash
+cd apps/worker-publish
+npm run pm2:start
+pm2 startup systemd          # imprime un sudo … — ejecútalo tal cual
+pm2 save                     # graba la lista actual de procesos
+```
+
+A partir de aquí, el `worker-publish` arranca solo en cada reboot.
+
+### D. Firewall / acceso externo
+
+Por defecto el stack escucha en:
+
+- `80`  → web UI
+- `3001` → API
+- `6379` → Redis (NUNCA debe estar abierto a internet)
+
+En `ufw`:
+
+```bash
+sudo ufw allow 80/tcp
+sudo ufw allow 3001/tcp      # solo si vas a llamar a la API desde fuera
+# NUNCA: sudo ufw allow 6379/tcp
+```
+
+Mejor todavía: pon un reverse proxy (Caddy, Nginx, Traefik) delante con TLS, y deja el puerto 3001 cerrado al exterior.
+
+### E. Sanity check post-deploy
+
+```bash
+# todos verdes:
+docker compose ps
+pm2 status
+curl -sf http://localhost:3001/health
+ls apps/worker-publish/sessions/default-profile/Default/IndexedDB | head -3   # debe haber ficheros
+```
+
+Si los cuatro pasan, programa un job de texto desde la UI y mira `pm2 logs tamaya-worker-publish` — deberías ver el flujo completo.
 
 ---
 
@@ -536,6 +628,46 @@ WA invalida sesiones antiguas. Reescanea; si persiste, borra `apps/worker-publis
 
 **Job en `failed`**
 Mira el campo `lastError` en la tabla (o en la UI) y el screenshot en `apps/worker-publish/debug/`. La mayoría de fallos son por cambios de WA Web — los selectores están centralizados en `packages/core/src/browser/selectors.ts`.
+
+**`Access denied for user 'admin'@... (using password: NO)`**
+La password está saliendo vacía. Casi siempre: caracteres especiales (`#`, `$`, `&`, `*`, `%`) sin percent-encode. Pasa la pw por:
+```bash
+node -p 'encodeURIComponent("MI-PASSWORD-EN-PLANO")'
+```
+Y mete el resultado entre `admin:` y `@`. Comillas simples alrededor del valor en `.env`.
+
+**`TLS/SSL error: Certificate verification failure`** al conectar a RDS
+RDS exige TLS y la CA de Amazon no está en el truststore por defecto. Tamaya **activa SSL automáticamente** al detectar `*.rds.amazonaws.com` y NO verifica la CA (`rejectUnauthorized: false`) — suficiente para tráfico autenticado por security group. Si quieres verificación estricta, pon `DATABASE_SSL=verify` y mete el bundle de Amazon en el truststore del sistema.
+
+Para que el cliente `mysql` de terminal conecte:
+```bash
+# Oracle MySQL client:
+mysql -h ... -u admin -p --ssl-mode=REQUIRED
+# MariaDB client:
+mysql -h ... -u admin -p --ssl
+```
+
+**`pm2: command not found`**
+pm2 está como devDependency del workspace pero **necesita estar también global**. Instálalo con:
+```bash
+sudo npm install -g pm2          # rápido en máquina personal
+# o cambia el prefix de npm a ~/.npm-global para evitar sudo (ver README §"Antes de clonar el repo")
+```
+
+**`npm audit fix --force` destruyó mi instalación**
+No lo uses NUNCA en este repo — fuerza versiones major incompatibles (vite 5→8, pm2 5→7, drizzle 0.36→0.45). Recuperación:
+```bash
+git checkout -- package.json package-lock.json 'apps/*/package.json' 'packages/*/package.json'
+rm -rf node_modules apps/*/node_modules packages/*/node_modules
+npm install
+```
+Las vulns de `npm audit` que reporta este repo (esbuild en drizzle-kit, ws en pm2) son **dev-only** — no afectan a runtime de producción.
+
+**Mensaje partido en dos / texto enviado a medias antes de los saltos de línea**
+Bug viejo: `\n` en el texto se interpretaba como Enter (= enviar en WA Channels). Resuelto con `typeMultiline` (Shift+Enter entre líneas). Si vuelve a pasar, asegúrate de tener `core` en versión ≥ 0.4.0 y reinicia el worker.
+
+**Job marcado como `sent` pero el mensaje no llega a WhatsApp**
+Pasa cuando el selector del botón Send es genérico y clica algo distinto al botón real. Desde 0.4.0 hay verificación post-envío: se exige que aparezca un indicador (`msg-time` / `msg-check`) en los 15s siguientes al click; si no, el job se marca `failed` con un screenshot en `debug/`. Si ves esto en una versión < 0.4.0, actualiza.
 
 ---
 
