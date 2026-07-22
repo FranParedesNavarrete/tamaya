@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tamaya · Propuesta alta de Jobs</title>
+  <style>
+    :root{
+      --background:#ffffff; --foreground:#09090b; --card:#ffffff; --card-foreground:#09090b;
+      --muted:#f4f4f5; --muted-foreground:#71717a; --border:#e4e4e7; --input:#e4e4e7;
+      --primary:#18181b; --primary-foreground:#fafafa; --destructive:#ef4444; --ring:#18181b;
+      --radius:10px;
+    }
+    *{box-sizing:border-box} body{margin:0;background:var(--background);color:var(--foreground);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.45}.app{min-height:100vh;background:var(--background)}
+    .nav{height:57px;border-bottom:1px solid var(--border);background:var(--card);display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:10}.brand{display:flex;align-items:center;gap:10px;font-size:20px;font-weight:800;letter-spacing:-.02em}.brand-icon{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#18181b,#52525b)}.tabs{display:flex;gap:4px}.tab{padding:7px 12px;border-radius:8px;color:var(--muted-foreground);text-decoration:none;font-size:14px}.tab.active{background:var(--primary);color:var(--primary-foreground)}.tab:hover{background:var(--muted);color:var(--foreground)}
+    .wrap{padding:28px 96px 48px;max-width:1540px;margin:0 auto}.header{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:22px}.crumb{font-size:12px;color:var(--muted-foreground);margin-bottom:6px}.h1{font-size:30px;line-height:1.1;font-weight:800;letter-spacing:-.035em;margin:0}.lead{color:var(--muted-foreground);margin:8px 0 0;max-width:720px}.grid{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:24px;align-items:start}.card{border:1px solid var(--border);border-radius:var(--radius);background:var(--card);box-shadow:0 1px 2px rgba(0,0,0,.04)}.card-h{padding:18px 20px;border-bottom:1px solid var(--border)}.card-title{font-size:16px;font-weight:700;margin:0}.card-desc{font-size:13px;color:var(--muted-foreground);margin:4px 0 0}.card-c{padding:20px}.section{display:grid;gap:16px}.step{display:grid;grid-template-columns:32px minmax(0,1fr);gap:12px;padding:16px;border:1px solid var(--border);border-radius:12px;background:#fff}.num{width:32px;height:32px;border-radius:999px;background:var(--primary);color:var(--primary-foreground);display:grid;place-items:center;font-weight:800;font-size:13px}.step-title{font-weight:700;margin-bottom:8px}.label{display:block;font-size:13px;font-weight:600;margin-bottom:6px}.input,.textarea,.select{width:100%;border:1px solid var(--input);background:transparent;border-radius:8px;padding:9px 11px;font:inherit;outline:none}.input:focus,.textarea:focus,.select:focus{box-shadow:0 0 0 2px rgba(24,24,27,.12);border-color:var(--ring)}.textarea{min-height:190px;resize:vertical}.hint{font-size:12px;color:var(--muted-foreground);margin-top:6px}.row{display:flex;gap:10px;align-items:center}.row.wrap-row{flex-wrap:wrap}.btn{border:0;border-radius:8px;padding:9px 14px;background:var(--primary);color:var(--primary-foreground);font-weight:700;cursor:pointer}.btn.secondary{background:#fff;color:var(--foreground);border:1px solid var(--border)}.btn.destructive{background:var(--destructive);color:white}.btn.sm{padding:7px 10px;font-size:12px}.seg{display:inline-flex;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:#fff}.seg button{border:0;background:#fff;padding:8px 12px;font-weight:600;color:var(--muted-foreground)}.seg button.active{background:var(--primary);color:var(--primary-foreground)}.calendar{border:1px solid var(--border);border-radius:12px;padding:12px;background:#fff;margin-top:10px}.cal-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;text-align:center}.cal-grid span{font-size:11px;color:var(--muted-foreground);padding:4px}.day{height:32px;border:0;border-radius:8px;background:#fff}.day.muted{color:#a1a1aa}.day.active{background:var(--primary);color:var(--primary-foreground)}.time{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.media-card{border:1px solid var(--border);border-radius:12px;padding:14px;background:#fafafa}.file-zone{border:1px dashed #cbd5e1;border-radius:12px;background:#fff;padding:16px;text-align:center}.file-zone strong{display:block}.media-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}.media-tab{border:1px solid var(--border);border-radius:10px;background:#fff;padding:10px;text-align:left}.media-tab.active{border-color:#18181b;box-shadow:0 0 0 2px rgba(24,24,27,.08)}.upload-meta{display:flex;justify-content:space-between;gap:12px;margin-top:10px;color:var(--muted-foreground);font-size:12px}.preview{position:sticky;top:81px}.phone{margin:0 auto;border:1px solid #18181b;background:#18181b;border-radius:34px;padding:10px;width:310px;box-shadow:0 24px 60px rgba(0,0,0,.18)}.screen{background:#efeae2;border-radius:26px;min-height:560px;padding:14px;overflow:hidden}.wa-top{height:48px;background:#075e54;color:white;border-radius:20px 20px 4px 4px;display:flex;align-items:center;gap:10px;padding:0 12px}.avatar{width:30px;height:30px;border-radius:999px;background:#25d366}.wa-title{font-weight:700;font-size:13px}.wa-sub{font-size:11px;opacity:.8}.bubble{margin-top:18px;margin-left:auto;background:#dcf8c6;border-radius:14px 14px 4px 14px;padding:8px;max-width:250px;font-size:12px;box-shadow:0 1px 1px rgba(0,0,0,.08)}.media-preview{height:150px;background:linear-gradient(135deg,#f4f4f5,#d4d4d8);border-radius:10px;margin-bottom:8px;display:grid;place-items:center;color:#52525b;font-weight:700}.bubble p{white-space:pre-wrap;margin:0}.wa-time{text-align:right;font-size:10px;color:#64748b;margin-top:4px}.summary{margin-top:14px;border-top:1px solid var(--border);padding-top:14px}.summary-row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;font-size:13px}.summary-row span:first-child{color:var(--muted-foreground)}.alert{border:1px solid #f59e0b;background:#fffbeb;color:#92400e;border-radius:10px;padding:10px;font-size:12px;margin-top:12px}.actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}.counter{display:flex;justify-content:space-between;color:var(--muted-foreground);font-size:12px;margin-top:6px}.status-pill{border-radius:999px;padding:4px 8px;background:var(--muted);font-size:11px;font-weight:700}.ok{background:#dcfce7;color:#166534}.warn{background:#fef3c7;color:#92400e}
+    @media(max-width:1100px){.wrap{padding:24px}.grid{grid-template-columns:1fr}.preview{position:static}.phone{width:100%;max-width:330px}.tabs{display:none}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <nav class="nav">
+    <div class="brand"><span class="brand-icon"></span>Tamaya</div>
+    <div class="tabs"><a class="tab" href="#">Dashboard</a><a class="tab" href="#">Jobs</a><a class="tab active" href="#">Nuevo job</a><a class="tab" href="#">Canales</a><a class="tab" href="#">Ajustes</a></div>
+  </nav>
+  <main class="wrap">
+    <header class="header">
+      <div><div class="crumb">Jobs / Nuevo</div><h1 class="h1">Nuevo job</h1><p class="lead">Propuesta visual manteniendo la estética actual de Tamaya: top nav, colores neutros, cards shadcn-like y un preview sticky para validar antes de encolar.</p></div>
+      <button class="btn secondary">Ver documentación API</button>
+    </header>
+
+    <div class="grid">
+      <form class="section">
+        <div class="step">
+          <div class="num">1</div>
+          <div><div class="step-title">Canal de destino</div><label class="label">Canal *</label><select class="select"><option>[N8N] Pruebas n8n</option><option>[VLC] Agenda València</option></select><p class="hint">Usa el nombre exacto del canal en WhatsApp. Si hay invite link, Tamaya navegará por él.</p></div>
+        </div>
+
+        <div class="step">
+          <div class="num">2</div>
+          <div><div class="step-title">Contenido</div><label class="label">Texto / caption</label><textarea class="textarea">🎵 La música en directo vuelve a uno de los escenarios más especiales de València.
+
+Durante el mes de julio, la Ciudad de las Artes y las Ciencias se llena de ritmo con una nueva edición de “Un Lago de Conciertos”.
+
+🗓️ CUÁNDO
+* 24, 29, 30 y 31 de julio
+
+⏰ HORA
+Todos los conciertos comienzan a las 19:00 h.</textarea><div class="counter"><span>Saltos de línea y emojis conservados</span><span>462 caracteres</span></div></div>
+        </div>
+
+        <div class="step">
+          <div class="num">3</div>
+          <div>
+            <div class="step-title">Media</div>
+            <p class="hint" style="margin-top:0">Mantiene las dos vías reales de Tamaya: subir archivo local o pegar URL pública/S3. No se oculta el input file.</p>
+            <div class="media-card">
+              <div class="media-tabs"><button type="button" class="media-tab active"><strong>Subir archivo</strong><br><span class="hint">Imagen/vídeo local</span></button><button type="button" class="media-tab"><strong>URL / S3</strong><br><span class="hint">https:// o s3://</span></button></div>
+              <div class="file-zone"><strong>Arrastra una imagen o vídeo aquí</strong><span class="hint">o selecciona desde tu equipo</span><div style="margin-top:12px"><input type="file" accept="image/*,video/*" /></div></div>
+              <div class="upload-meta"><span>Soportado: image/*, video/*</span><span class="status-pill ok">listo para subir</span></div>
+            </div>
+            <div class="media-card" style="margin-top:10px"><label class="label">URL alternativa</label><input class="input" value="https://www.wikimedia.org/static/images/wmf-logo.png" /><div class="upload-meta"><span>Se resolverá inmediatamente al crear el job</span><button class="btn sm secondary" type="button">Comprobar URL</button></div></div>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="num">4</div>
+          <div><div class="step-title">Cuándo publicar</div><div class="seg"><button type="button" class="active">Ahora</button><button type="button">Programar</button></div><div class="calendar"><div class="cal-top"><button class="btn sm secondary" type="button">‹</button><strong>Julio 2026</strong><button class="btn sm secondary" type="button">›</button></div><div class="cal-grid"><span>L</span><span>M</span><span>X</span><span>J</span><span>V</span><span>S</span><span>D</span><button class="day muted">20</button><button class="day muted">21</button><button class="day active">22</button><button class="day">23</button><button class="day">24</button><button class="day">25</button><button class="day">26</button></div><div class="time"><select class="select"><option>21</option></select><select class="select"><option>00</option></select></div></div></div>
+        </div>
+
+        <div class="actions"><button type="button" class="btn secondary">Cancelar</button><button class="btn">Publicar ahora</button></div>
+      </form>
+
+      <aside class="preview">
+        <div class="card">
+          <div class="card-h"><h2 class="card-title">Preview de publicación</h2><p class="card-desc">Antes de encolar, valida canal, media, copy y hora Madrid.</p></div>
+          <div class="card-c">
+            <div class="phone"><div class="screen"><div class="wa-top"><div class="avatar"></div><div><div class="wa-title">Pruebas n8n</div><div class="wa-sub">WhatsApp Channel</div></div></div><div class="bubble"><div class="media-preview">Imagen</div><p>🎵 La música en directo vuelve a uno de los escenarios más especiales de València.
+
+Durante el mes de julio...</p><div class="wa-time">ahora ✓</div></div></div></div>
+            <div class="summary"><div class="summary-row"><span>Canal</span><strong>Pruebas n8n</strong></div><div class="summary-row"><span>Media</span><strong>1 imagen</strong></div><div class="summary-row"><span>Publicación</span><strong>Ahora</strong></div><div class="summary-row"><span>Pipeline</span><strong>resolve inmediato → publish</strong></div></div>
+            <div class="alert"><strong>Nota UX:</strong> si hay más de un media, mostrar aviso “multi media en stand by” hasta que WhatsApp lo permita de forma fiable.</div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </main>
+</div>
+</body>
+</html>

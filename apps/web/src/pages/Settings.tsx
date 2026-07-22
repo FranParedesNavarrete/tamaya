@@ -85,19 +85,20 @@ export function Settings() {
   }
 
   return (
-    <div className="p-6 max-w-3xl mx-auto space-y-6">
-      <div>
+    <div className="py-6 px-6 max-w-6xl mx-auto space-y-6">
+      <div className="max-w-3xl">
         <h1 className="text-2xl font-bold">Ajustes</h1>
         <p className="text-sm text-muted-foreground">
-          Configuración de Tamaya. La seguridad de la API se gestiona aquí.
+          Configuración operativa de Tamaya: seguridad, WhatsApp, diagnóstico, selectores y embeds.
         </p>
       </div>
 
       {/* ---------- Diagnóstico del pipeline (Iteración 3) ---------- */}
       <OpsSection />
 
+      <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px] items-start">
       {/* ---------- Seguridad API ---------- */}
-      <Card>
+      <Card className="h-full">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base text-foreground">
             <KeyRound className="h-4 w-4" /> Seguridad API
@@ -199,6 +200,7 @@ export function Settings() {
 
       {/* ---------- WhatsApp (Iteración 2) ---------- */}
       <WhatsAppSection />
+      </section>
 
       {/* ---------- Selectores editables (Iteración 2) ---------- */}
       <SelectorsSection />
@@ -227,6 +229,13 @@ export function Settings() {
 function EmbedsSection({ token }: { token: string | null }) {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+  const [copiedEmbed, setCopiedEmbed] = useState<string | null>(null);
+
+  async function copyEmbed(name: string, iframe: string) {
+    await navigator.clipboard.writeText(iframe);
+    setCopiedEmbed(name);
+    setTimeout(() => setCopiedEmbed(null), 1800);
+  }
   const snippets = [
     { name: 'Overview completo', path: `/embed/overview?range=30d${tokenParam}`, h: 720 },
     { name: 'KPIs', path: `/embed/kpis?range=30d${tokenParam}`, h: 180 },
@@ -251,17 +260,27 @@ function EmbedsSection({ token }: { token: string | null }) {
             Guarda el API token en este navegador para generar snippets con bootstrap automático. Sin token, el iframe necesita que Tamaya ya tenga token en localStorage.
           </div>
         )}
-        <div className="space-y-2">
+        <div className="grid gap-2 lg:grid-cols-2">
           {snippets.map((s) => {
             const url = `${origin}${s.path}`;
             const iframe = `<iframe src="${url}" width="100%" height="${s.h}" style="border:0;border-radius:12px;overflow:hidden" loading="lazy"></iframe>`;
             return (
-              <div key={s.name} className="rounded-md border p-2">
+              <div key={s.name} className="rounded-md border bg-background/60 p-3">
                 <div className="mb-1 flex items-center justify-between gap-2">
                   <div className="text-sm font-medium">{s.name}</div>
-                  <a className="text-xs text-primary underline" href={url} target="_blank" rel="noreferrer">Abrir</a>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 text-xs text-primary underline"
+                      onClick={() => void copyEmbed(s.name, iframe)}
+                    >
+                      {copiedEmbed === s.name ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                      {copiedEmbed === s.name ? 'Copiado' : 'Copiar'}
+                    </button>
+                    <a className="text-xs text-primary underline" href={url} target="_blank" rel="noreferrer">Abrir</a>
+                  </div>
                 </div>
-                <code className="block overflow-x-auto rounded bg-muted px-2 py-1.5 text-[11px]">{iframe}</code>
+                <code className="block max-h-24 overflow-auto rounded bg-muted px-2 py-1.5 text-[11px] leading-relaxed">{iframe}</code>
               </div>
             );
           })}

@@ -89,6 +89,14 @@ export function NewJob() {
     }
   }
 
+  const selectedChannel = channels.find(c => c.id === channelId);
+  const filledMedia = media.filter(m => m.source);
+  const publicationLabel = publishNow
+    ? 'Ahora'
+    : scheduledAt ? new Date(scheduledAt).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' }) : 'Sin fecha';
+  const previewText = text.trim() || 'Escribe un texto para previsualizar el caption…';
+  const previewTextShort = previewText.length > 220 ? `${previewText.slice(0, 220)}…` : previewText;
+
   async function onFileSelected(idx: number, file: File) {
     if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
       setErr(`Tipo no soportado: ${file.type || 'desconocido'}. Solo imágenes y vídeos.`);
@@ -124,11 +132,18 @@ export function NewJob() {
   if (prefilling) return <p className="p-6">Cargando job original…</p>;
 
   return (
-    <form onSubmit={onSubmit} className="p-6 max-w-2xl mx-auto space-y-4">
-      <h1 className="text-2xl font-bold">
-        {fromJobId ? 'Reintentar job' : 'Nuevo job'}
-      </h1>
+    <form onSubmit={onSubmit} className="p-6 max-w-6xl mx-auto">
+      <div className="mb-5">
+        <h1 className="text-2xl font-bold">
+          {fromJobId ? 'Reintentar job' : 'Nuevo job'}
+        </h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          Crea una publicación y revisa cómo quedará antes de encolarla.
+        </p>
+      </div>
 
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px] items-start">
+        <div className="space-y-4">
       <div>
         <Label>Canal<span className="text-destructive ml-0.5">*</span></Label>
         {channels.length === 0 ? (
@@ -232,6 +247,66 @@ export function NewJob() {
         <Button type="button" variant="outline" onClick={() => nav('/')}>
           Cancelar
         </Button>
+      </div>
+        </div>
+
+        <aside className="lg:sticky lg:top-20">
+          <div className="rounded-lg border bg-card text-card-foreground shadow-sm overflow-hidden">
+            <div className="border-b px-4 py-3">
+              <h2 className="text-base font-semibold">Preview de publicación</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Valida canal, media, copy y hora Madrid antes de encolar.
+              </p>
+            </div>
+            <div className="p-4 space-y-4">
+              <div className="mx-auto w-[300px] rounded-[2rem] bg-zinc-900 p-2 shadow-2xl">
+                <div className="min-h-[500px] rounded-[1.5rem] bg-[#efeae2] p-3 overflow-hidden">
+                  <div className="flex items-center gap-2 rounded-t-[1.2rem] rounded-b-md bg-[#075e54] px-3 py-2 text-white">
+                    <div className="h-8 w-8 rounded-full bg-[#25d366]" />
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold">{selectedChannel?.name ?? 'Selecciona un canal'}</div>
+                      <div className="text-[11px] opacity-80">WhatsApp Channel</div>
+                    </div>
+                  </div>
+                  <div className="ml-auto mt-4 max-w-[245px] rounded-xl rounded-br-sm bg-[#dcf8c6] p-2 text-xs shadow-sm">
+                    {filledMedia.length > 0 && (
+                      <div className="mb-2 grid h-32 place-items-center rounded-lg bg-gradient-to-br from-zinc-100 to-zinc-300 font-semibold text-zinc-600">
+                        {filledMedia.length === 1 ? 'Media' : `${filledMedia.length} medias`}
+                      </div>
+                    )}
+                    <p className="whitespace-pre-wrap break-words">{previewTextShort}</p>
+                    <div className="mt-1 text-right text-[10px] text-slate-500">{publishNow ? 'ahora' : 'programado'} ✓</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t pt-3 text-sm">
+                <div className="flex justify-between gap-3 py-1.5">
+                  <span className="text-muted-foreground">Canal</span>
+                  <strong className="text-right truncate">{selectedChannel?.name ?? '—'}</strong>
+                </div>
+                <div className="flex justify-between gap-3 py-1.5">
+                  <span className="text-muted-foreground">Media</span>
+                  <strong>{filledMedia.length === 0 ? 'Sin media' : `${filledMedia.length} ${filledMedia.length === 1 ? 'archivo' : 'archivos'}`}</strong>
+                </div>
+                <div className="flex justify-between gap-3 py-1.5">
+                  <span className="text-muted-foreground">Publicación</span>
+                  <strong className="text-right">{publicationLabel}</strong>
+                </div>
+                <div className="flex justify-between gap-3 py-1.5">
+                  <span className="text-muted-foreground">Pipeline</span>
+                  <strong className="text-right">resolve inmediato → publish</strong>
+                </div>
+              </div>
+
+              {filledMedia.length > 1 && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+                  <strong>Nota UX:</strong> multi media queda en stand by hasta que WhatsApp Channels lo permita de forma fiable.
+                </div>
+              )}
+            </div>
+          </div>
+        </aside>
       </div>
     </form>
   );
