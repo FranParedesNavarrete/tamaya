@@ -7,11 +7,22 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
 import { Select } from '../components/ui/select';
+import { DateTimePicker } from '../components/DateTimePicker';
 
 interface MediaRow {
   source: string;
   originalName?: string;
   uploading?: boolean;
+}
+
+function toDatetimeLocalValue(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function defaultScheduledAt(): string {
+  const d = new Date(Date.now() + 5 * 60_000);
+  return toDatetimeLocalValue(d);
 }
 
 export function NewJob() {
@@ -59,9 +70,11 @@ export function NewJob() {
     setSubmitting(true);
     setErr(null);
     try {
-      const iso = publishNow
-        ? new Date().toISOString()
-        : new Date(scheduledAt).toISOString();
+      const scheduledDate = publishNow ? new Date() : new Date(scheduledAt);
+      if (!publishNow && scheduledDate.getTime() <= Date.now() + 30_000) {
+        throw new Error('La fecha programada debe estar al menos 30 segundos en el futuro.');
+      }
+      const iso = scheduledDate.toISOString();
       await api.createJob({
         channelId,
         text: text || undefined,
@@ -146,7 +159,11 @@ export function NewJob() {
             type="checkbox"
             id="publishNow"
             checked={publishNow}
-            onChange={e => setPublishNow(e.target.checked)}
+            onChange={e => {
+              const checked = e.target.checked;
+              setPublishNow(checked);
+              if (!checked && !scheduledAt) setScheduledAt(defaultScheduledAt());
+            }}
             className="h-4 w-4"
           />
           <label htmlFor="publishNow" className="text-sm cursor-pointer select-none">
@@ -154,12 +171,10 @@ export function NewJob() {
           </label>
         </div>
         {!publishNow && (
-          <Input
-            type="datetime-local"
+          <DateTimePicker
             value={scheduledAt}
-            onChange={e => setScheduledAt(e.target.value)}
-            required={!publishNow}
-            className="mt-2"
+            min={new Date(Date.now() + 30_000)}
+            onChange={setScheduledAt}
           />
         )}
       </div>

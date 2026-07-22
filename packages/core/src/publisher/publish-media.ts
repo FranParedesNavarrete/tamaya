@@ -21,11 +21,19 @@ import { SELECTORS } from '../browser/selectors.js';
 import {
   dumpDebugInfo,
   humanPause,
-  typeMultiline,
+  replaceEditableText,
   waitForAny,
 } from '../browser/dom-helpers.js';
 import { logger } from '../logger.js';
 import { navigateToChannel } from './publish-text.js';
+import {
+  findLastThreadTexts,
+  findPageVisibleText,
+  detectMediaInLastItems,
+  textMatchesAny,
+  type VerificationObserved,
+} from './verify.js';
+import type { PublishVerificationMeta } from '@tamaya/shared-types';
 
 export type MediaKind = 'image' | 'video' | 'audio' | 'document';
 
@@ -36,7 +44,10 @@ export interface PublishMediaInput {
     name: string;
   };
   body?: string;
+  /** Primer archivo / compatibilidad histórica. */
   mediaPath: string;
+  /** Varios archivos en una misma publicación de WhatsApp Channels. */
+  mediaPaths?: string[];
   mediaKind: MediaKind;
 }
 
@@ -46,7 +57,30 @@ export interface PublishResult {
   mediaSha256?: string;
   error?: string;
   debugDump?: string;
+  verificationMeta?: PublishVerificationMeta;
+  /**
+   * true si el fallo ocurrió DESPUÉS de pulsar Send (contenido quizá ya
+   * publicado). worker-publish NO debe reintentar en este caso para no
+   * duplicar la publicación.
+   */
+  postSendMaybeDelivered?: boolean;
 }
+
+/** Parseo seguro de un entero desde env; fallback + warning si inválido. */
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    logger.warn({ name, raw, fallback }, 'invalid env value — using fallback');
+    return fallback;
+  }
+  return Math.floor(n);
+}
+
+// Timeouts de upload configurables por .env (aplican al caso más lento: vídeo).
+const UPLOAD_TIMEOUT_MAX_MS = envInt('TAMAYA_MEDIA_UPLOAD_TIMEOUT_MAX_MS', 1_800_000);
+const UPLOAD_TIMEOUT_PER_MB_MS = envInt('TAMAYA_MEDIA_UPLOAD_TIMEOUT_PER_MB_MS', 6_000);
 
 /**
  * Timeouts escalados por tamaño del archivo.
@@ -78,8 +112,8 @@ const TIMEOUTS: Record<MediaKind, { preview: TimeoutSpec; upload: TimeoutSpec }>
     // Un vídeo grande puede tardar bastante aunque todavía no haya empezado a subir.
     preview: { baseMs: 90_000, perMbMs: 2_000, maxMs: 600_000 /* 10 min */ },
     // Upload: lo más lento. En red doméstica española típica (~10-20 Mbps subida),
-    // 100 MB tardan 40-80 s. Añadimos margen 3x para cuando haya congestión.
-    upload: { baseMs: 240_000, perMbMs: 6_000, maxMs: 1_800_000 /* 30 min */ },
+    // 100 MB tardan 40-80 s. Configurable por .env (por-MB y tope duro).
+    upload: { baseMs: 240_000, perMbMs: UPLOAD_TIMEOUT_PER_MB_MS, maxMs: UPLOAD_TIMEOUT_MAX_MS },
   },
   audio: {
     preview: { baseMs: 45_000, perMbMs: 1_500, maxMs: 300_000 },
@@ -106,16 +140,29 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
   }
 
   const started = Date.now();
-  const fileStat = await stat(input.mediaPath);
-  const sizeMb = fileStat.size / (1024 * 1024);
-  const mediaSha256 = await sha256OfFile(input.mediaPath);
+  const mediaPaths = input.mediaPaths && input.mediaPaths.length > 0
+    ? input.mediaPaths
+    : [input.mediaPath];
+  const fileStats = await Promise.all(mediaPaths.map((p) => stat(p)));
+  const totalSizeBytes = fileStats.reduce((sum, s) => sum + s.size, 0);
+  const sizeMb = totalSizeBytes / (1024 * 1024);
+  const mediaSha256 = await sha256OfFiles(mediaPaths);
   logger.info(
-    { kind: input.mediaKind, sizeMb: sizeMb.toFixed(2), sizeBytes: fileStat.size },
+    { kind: input.mediaKind, count: mediaPaths.length, sizeMb: sizeMb.toFixed(2), sizeBytes: totalSizeBytes },
     'publishMedia start',
   );
 
   const context = await launchPersistentContextForTenant();
   let debugDump: string | undefined;
+  let sendClicked = false;
+
+  const expected: PublishVerificationMeta['expected'] = {
+    hasText: Boolean(input.body && input.body.length > 0),
+    textLength: input.body?.length ?? 0,
+    hasMedia: true,
+    mediaKind: input.mediaKind,
+    mediaSha256,
+  };
 
   try {
     const page = context.pages()[0] ?? (await context.newPage());
@@ -124,7 +171,7 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
 
     await navigateToChannel(page, input.channelIdentifier);
 
-    await attachMedia(page, input.mediaPath, input.mediaKind);
+    await attachMedia(page, mediaPaths, input.mediaKind);
     await waitForMediaPreview(page, input.mediaKind, sizeMb);
     await assertNotStickerPreview(page);
 
@@ -139,14 +186,49 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
 
     // Verificar que el Send está realmente clickable antes de pulsarlo.
     await waitForSendButtonReady(page);
+    const threadMarkersBeforeSend = await countThreadMarkers(page);
+
+    // ---- PUNTO DE NO RETORNO: a partir de aquí, el contenido puede haberse
+    // publicado, así que un fallo NO debe reintentarse automáticamente. ----
     await sendFromPreview(page);
+    sendClicked = true;
 
-    // Esperar a que el upload termine: el preview debe cerrarse Y la burbuja
-    // del mensaje debe aparecer en el hilo con el tick (msg-check / msg-dblcheck
-    // / msg-time). Si cerramos el contexto antes, cancelamos el upload.
-    await waitForUploadComplete(page, input.mediaKind, sizeMb);
+    const observed = await verifyAfterSend(page, {
+      kind: input.mediaKind,
+      sizeMb,
+      body: input.body,
+      threadMarkersBeforeSend,
+    });
 
-    return { success: true, durationMs: Date.now() - started, mediaSha256 };
+    const { result, reason } = decideResult(expected, observed);
+    const verificationMeta: PublishVerificationMeta = {
+      expected,
+      observed,
+      result,
+      reason,
+      checkedAt: new Date().toISOString(),
+    };
+
+    if (result === 'verified') {
+      logger.info({ observed }, 'publishMedia verified');
+      return { success: true, durationMs: Date.now() - started, mediaSha256, verificationMeta };
+    }
+
+    // Post-send sin confirmación clara → NO reintentar (posible duplicado).
+    const page0 = context.pages()[0];
+    if (page0) {
+      try { debugDump = await dumpDebugInfo(page0, 'publish-media-verify'); } catch { /* logged */ }
+    }
+    logger.warn({ result, reason, observed }, 'publishMedia post-send verification not confirmed');
+    return {
+      success: false,
+      durationMs: Date.now() - started,
+      mediaSha256,
+      error: reason ?? 'post-send verification failed',
+      debugDump,
+      verificationMeta,
+      postSendMaybeDelivered: true,
+    };
   } catch (err) {
     const page = context.pages()[0];
     if (page) {
@@ -156,13 +238,30 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
         /* ya logueado */
       }
     }
-    logger.error({ err }, 'publishMedia failed');
+    const errMsg = err instanceof Error ? err.message : String(err);
+    logger.error({ err, sendClicked }, 'publishMedia failed');
+    // Si ya habíamos pulsado Send, el error es post-send → ambiguo, no reintentar.
+    const verificationMeta: PublishVerificationMeta | undefined = sendClicked
+      ? {
+          expected,
+          observed: {
+            previewClosed: false, sendClicked: true, indicatorAppeared: false,
+            threadItemAppeared: false, textMatched: 'unknown', mediaDetected: 'unknown',
+            uploadPendingCleared: 'unknown',
+          },
+          result: 'ambiguous_after_send',
+          reason: errMsg,
+          checkedAt: new Date().toISOString(),
+        }
+      : undefined;
     return {
       success: false,
       durationMs: Date.now() - started,
       mediaSha256,
-      error: err instanceof Error ? err.message : String(err),
+      error: errMsg,
       debugDump,
+      verificationMeta,
+      postSendMaybeDelivered: sendClicked,
     };
   } finally {
     await context.close();
@@ -172,6 +271,12 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
 async function sha256OfFile(path: string): Promise<string> {
   const buf = await readFile(path);
   return createHash('sha256').update(buf).digest('hex');
+}
+
+async function sha256OfFiles(paths: string[]): Promise<string> {
+  if (paths.length === 1) return sha256OfFile(paths[0]);
+  const hashes = await Promise.all(paths.map(sha256OfFile));
+  return createHash('sha256').update(hashes.join(':')).digest('hex');
 }
 
 export async function fileMeta(path: string): Promise<{
@@ -196,7 +301,7 @@ export async function fileMeta(path: string): Promise<{
  * Fallback: si el filechooser no se dispara (cambio del DOM), intentamos
  * `setInputFiles` en el input multi-archivo genérico.
  */
-async function attachMedia(page: Page, path: string, kind: MediaKind): Promise<void> {
+async function attachMedia(page: Page, paths: string[], kind: MediaKind): Promise<void> {
   const attachBtn = await waitForAny(page, SELECTORS.attachButton, {
     timeout: 10_000,
   });
@@ -213,8 +318,8 @@ async function attachMedia(page: Page, path: string, kind: MediaKind): Promise<v
       page.waitForEvent('filechooser', { timeout: 5_000 }),
       menuItem.click(),
     ]);
-    await fileChooser.setFiles(path);
-    logger.info({ path }, 'media attached via Photos & videos filechooser');
+    await fileChooser.setFiles(paths);
+    logger.info({ paths, count: paths.length }, 'media attached via Photos & videos filechooser');
     return;
   } catch (err) {
     logger.warn(
@@ -234,8 +339,8 @@ async function attachMedia(page: Page, path: string, kind: MediaKind): Promise<v
     const count = await input.count().catch(() => 0);
     if (count === 0) continue;
     try {
-      await input.setInputFiles(path);
-      logger.info({ selector: sel, path }, 'media attached (fallback input)');
+      await input.setInputFiles(paths);
+      logger.info({ selector: sel, paths, count: paths.length }, 'media attached (fallback input)');
       return;
     } catch (err) {
       logger.debug({ selector: sel, err }, 'setInputFiles failed, trying next');
@@ -332,9 +437,8 @@ async function addCaption(page: Page, body: string): Promise<void> {
   });
   await caption.click();
   await humanPause(page, [200, 400]);
-  // typeMultiline preserva saltos de línea con Shift+Enter — sin esto, un
-  // `\n` en el caption enviaría el mensaje a medias en WA Channels.
-  await typeMultiline(page, caption, body, { delayMs: 50 });
+  // Pegar el caption completo es más estable para copies largos con saltos.
+  await replaceEditableText(page, caption, body, { delayMs: 50 });
   logger.debug({ body }, 'caption typed on preview');
   await humanPause(page, [300, 600]);
 }
@@ -471,99 +575,158 @@ async function sendFromPreview(page: Page): Promise<void> {
  * Además instrumentamos con logs cada 10s para saber dónde se queda el
  * proceso si falla.
  */
-async function waitForUploadComplete(
-  page: Page,
-  kind: MediaKind,
-  sizeMb: number,
-): Promise<void> {
-  const total = scaledTimeout(TIMEOUTS[kind].upload, sizeMb);
-  logger.info(
-    { kind, sizeMb: sizeMb.toFixed(2), timeoutMs: total, timeoutMin: (total / 60_000).toFixed(1) },
-    'waiting for upload to complete',
+async function countThreadMarkers(page: Page): Promise<number> {
+  // WA Channels no siempre renderiza los ticks msg-time/msg-check que usamos
+  // en chats normales. Como señal adicional contamos filas/burbujas del hilo
+  // antes/después de clicar Send: si aumenta, el mensaje sí se insertó.
+  const selectors = [
+    'div[role="row"]',
+    'div.message-out',
+    'div[data-pre-plain-text]',
+  ];
+  const counts = await Promise.all(
+    selectors.map((sel) => page.locator(sel).count().catch(() => 0)),
   );
+  return Math.max(...counts);
+}
 
+const INDICATOR_SELECTOR =
+  'span[data-icon="msg-time"], span[data-icon="msg-check"], span[data-icon="msg-dblcheck"]';
+const FAILED_SELECTOR =
+  'span[data-icon="msg-failed"], [aria-label*="Reintentar" i], [aria-label*="Retry" i]';
+
+/**
+ * Verifica el resultado tras pulsar Send, SIN depender solo de los ticks
+ * (WhatsApp Channels a veces no los muestra). Devuelve señales observadas para
+ * auditoría; no lanza (el llamador decide con `decideResult`).
+ */
+async function verifyAfterSend(
+  page: Page,
+  opts: { kind: MediaKind; sizeMb: number; body?: string; threadMarkersBeforeSend: number },
+): Promise<VerificationObserved> {
+  const { kind, sizeMb, body, threadMarkersBeforeSend } = opts;
+  const total = scaledTimeout(TIMEOUTS[kind].upload, sizeMb);
   const startedAt = Date.now();
   const overallDeadline = startedAt + total;
 
-  // 1) Preview debe cerrarse. Asignamos hasta el 40% del presupuesto a esta
-  //    fase (en la práctica suele cerrarse casi instantáneo tras el click).
-  const previewDeadline = Math.min(
-    overallDeadline,
-    Date.now() + Math.max(60_000, Math.floor(total * 0.4)),
-  );
+  const observed: VerificationObserved = {
+    previewClosed: false,
+    sendClicked: true,
+    indicatorAppeared: false,
+    threadItemAppeared: false,
+    textMatched: 'unknown',
+    mediaDetected: 'unknown',
+    uploadPendingCleared: 'unknown',
+  };
+
+  // 1) El preview debe cerrarse (WA aceptó el envío localmente).
+  const previewBudget = Math.max(60_000, Math.floor(total * 0.4));
   try {
     await page.waitForSelector('img[alt="Preview"], video[src^="blob:"]', {
       state: 'detached',
-      timeout: previewDeadline - Date.now(),
+      timeout: Math.min(previewBudget, overallDeadline - Date.now()),
     });
+    observed.previewClosed = true;
     logger.info({ elapsedMs: Date.now() - startedAt }, 'preview overlay closed');
-  } catch (err) {
-    logger.warn(
-      { err: err instanceof Error ? err.message : String(err) },
-      'preview overlay did not close in time — continuing to pending check',
-    );
+  } catch {
+    logger.warn('preview overlay did not close in time');
   }
 
-  // 2) CRÍTICO: necesitamos PRUEBA de que el envío llegó a iniciarse. Si el
-  //    Send "fantasma" (click en un elemento equivocado) cerró el preview pero
-  //    no encoló nada, NINGÚN indicador aparecerá. Antes el bucle daba esto
-  //    por exitoso ("0 pendientes = ok") — falso positivo flagrante.
-  //
-  //    Esperamos hasta ~15s a que aparezca CUALQUIERA de:
-  //      - msg-time   → mensaje pendiente de subir
-  //      - msg-check  → entregado
-  //      - msg-dblcheck → leído
-  //      - msg-failed o aria-label "Reintentar" → WA mismo reporta fallo
-  //
-  //    Si no aparece ninguno, el "envío" no ocurrió. Throw → job marcado failed.
-  const indicatorSelector =
-    'span[data-icon="msg-time"], span[data-icon="msg-check"], span[data-icon="msg-dblcheck"], span[data-icon="msg-failed"], [aria-label*="Reintentar" i], [aria-label*="Retry" i]';
-  let indicatorAppeared = false;
+  // 2) Evidencia de inserción: indicador (tick) o nuevo item en el hilo.
   const indicatorDeadline = Date.now() + 15_000;
   while (Date.now() < indicatorDeadline) {
-    const cnt = await page.locator(indicatorSelector).count().catch(() => 0);
-    if (cnt > 0) {
-      indicatorAppeared = true;
+    if ((await page.locator(INDICATOR_SELECTOR).count().catch(() => 0)) > 0) {
+      observed.indicatorAppeared = true;
+      break;
+    }
+    if ((await countThreadMarkers(page)) > threadMarkersBeforeSend) {
+      observed.threadItemAppeared = true;
       break;
     }
     await page.waitForTimeout(500);
   }
-  if (!indicatorAppeared) {
-    throw new Error(
-      'send verification failed: no message indicator appeared after Send click — likely clicked the wrong element',
-    );
+  // Reconfirmar item aunque el indicador ganase la carrera.
+  if (!observed.threadItemAppeared) {
+    observed.threadItemAppeared = (await countThreadMarkers(page)) > threadMarkersBeforeSend;
   }
 
-  // 3) Esperar a que NO queden iconos "msg-time" (reloj = subiendo/pendiente).
-  //    Log cada 10s con el número de pendientes para poder diagnosticar red lenta.
+  // 3) Verificación de CONTENIDO real (independiente de los ticks).
+  if (body && body.length > 0) {
+    const texts = await findLastThreadTexts(page, 5);
+    const pageText = await findPageVisibleText(page);
+    observed.textMatched = textMatchesAny(body, [...texts, pageText]);
+  } else {
+    observed.textMatched = 'unknown';
+  }
+  observed.mediaDetected = await detectMediaInLastItems(page, 5);
+
+  // 4) Esperar a que no queden pendientes (msg-time) ni fallos (msg-failed).
   let lastLog = Date.now();
-  let lastPending = -1;
   while (Date.now() < overallDeadline) {
     const [pending, failed] = await Promise.all([
       page.locator('span[data-icon="msg-time"]').count().catch(() => 0),
-      page.locator('span[data-icon="msg-failed"], [aria-label*="Retry" i], [aria-label*="Reintentar" i]').count().catch(() => 0),
+      page.locator(FAILED_SELECTOR).count().catch(() => 0),
     ]);
-
     if (failed > 0) {
-      throw new Error(`upload marked as failed by WhatsApp (retry indicator found)`);
+      observed.uploadPendingCleared = false;
+      logger.warn('upload marked as failed by WhatsApp (retry indicator found)');
+      return observed;
     }
     if (pending === 0) {
-      logger.info({ elapsedMs: Date.now() - startedAt }, 'upload completed — no pending messages');
-      return;
+      observed.uploadPendingCleared = true;
+      logger.info({ elapsedMs: Date.now() - startedAt }, 'upload completed — no pending');
+      return observed;
     }
-
-    // Log periódico de progreso (cada 10s o cuando cambie el número de pendientes).
-    if (pending !== lastPending || Date.now() - lastLog > 10_000) {
-      const remainingMs = overallDeadline - Date.now();
-      logger.info(
-        { pending, remainingSec: Math.round(remainingMs / 1000) },
-        'upload still pending',
-      );
-      lastPending = pending;
+    if (Date.now() - lastLog > 10_000) {
+      logger.info({ pending, remainingSec: Math.round((overallDeadline - Date.now()) / 1000) }, 'upload still pending');
       lastLog = Date.now();
     }
     await page.waitForTimeout(2000);
   }
+  // Timeout con pendientes → no podemos afirmar que terminó.
+  observed.uploadPendingCleared = 'unknown';
+  logger.warn({ timeoutMs: total }, 'upload did not clear pending within timeout');
+  return observed;
+}
 
-  logger.warn({ timeoutMs: total }, 'upload did not complete within timeout — closing anyway');
+/**
+ * Decide el resultado a partir de las señales observadas, priorizando NO
+ * duplicar: solo 'verification_failed' (retryable) cuando hay evidencia de que
+ * NO se publicó; el resto post-send es 'ambiguous_after_send' (no retry).
+ */
+function decideResult(
+  expected: PublishVerificationMeta['expected'],
+  o: VerificationObserved,
+): { result: PublishVerificationMeta['result']; reason?: string } {
+  const deliveredEvidence = o.indicatorAppeared || o.threadItemAppeared;
+
+  const textOk = !expected.hasText || o.textMatched === true;
+  const mediaOk = !expected.hasMedia || o.mediaDetected === true;
+  const expectedContentVerified = textOk && mediaOk;
+
+  // Fallo explícito de WA y sin evidencia de contenido correcto → no se publicó, retryable.
+  if (o.uploadPendingCleared === false && !deliveredEvidence && !expectedContentVerified) {
+    return { result: 'verification_failed', reason: 'WhatsApp marcó el envío como fallido y no apareció contenido esperado' };
+  }
+
+  // En Channels los ticks y el conteo de burbujas pueden no aparecer aunque el
+  // contenido sí esté visible en los últimos items. Si encontramos TODO lo que
+  // esperábamos (caption/texto y media), el preview cerró y no hay fallo de
+  // subida, lo consideramos verificado aunque no haya ticks.
+  if (expectedContentVerified && o.previewClosed && o.uploadPendingCleared !== false) {
+    return { result: 'verified' };
+  }
+
+  if (deliveredEvidence && textOk && (!expected.hasMedia || o.mediaDetected !== false) && o.uploadPendingCleared !== false) {
+    return { result: 'verified' };
+  }
+
+  // Cualquier otra situación tras pulsar Send: no confirmamos, no reintentar.
+  const reasons: string[] = [];
+  if (!deliveredEvidence) reasons.push('sin indicador ni item nuevo en el hilo');
+  if (expected.hasText && o.textMatched !== true) reasons.push('caption/texto no confirmado en el hilo');
+  if (expected.hasMedia && o.mediaDetected === false) reasons.push('media no detectada en el hilo');
+  if (o.uploadPendingCleared === false) reasons.push('WhatsApp marcó fallo de subida');
+  if (o.uploadPendingCleared === 'unknown') reasons.push('subida no confirmada (timeout)');
+  return { result: 'ambiguous_after_send', reason: reasons.join('; ') || 'contenido no verificable tras enviar' };
 }

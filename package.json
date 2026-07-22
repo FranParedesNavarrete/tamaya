@@ -7,7 +7,9 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -ws --if-present",
+    "build": "npm run build:packages && npm run build:apps",
+    "build:packages": "npm run build -w @tamaya/shared-types && npm run build -w @tamaya/db && npm run build -w @tamaya/media-resolver && npm run build -w @tamaya/core",
+    "build:apps": "npm run build -w @tamaya/api && npm run build -w @tamaya/web && npm run build -w @tamaya/worker-resolve && npm run build -w @tamaya/worker-publish",
     "dev:api": "npm run dev -w apps/api",
     "dev:web": "npm run dev -w apps/web",
     "dev:worker-publish": "npm run dev -w apps/worker-publish",
@@ -18,7 +20,16 @@
     "db:studio": "npm run db:studio -w @tamaya/db",
     "stack:up": "docker compose up -d",
     "stack:down": "docker compose down",
-    "stack:logs": "docker compose logs -f"
+    "stack:logs": "docker compose logs -f",
+    "stack:start": "docker compose up -d --build && npm run native:start",
+    "stack:stop": "npm run native:stop && docker compose down",
+    "stack:restart": "npm run stack:stop && npm run stack:start",
+    "native:start": "npm run pm2:start -w apps/worker-publish",
+    "native:stop": "npm run pm2:stop:all -w apps/worker-publish",
+    "native:restart": "npm run pm2:restart:all -w apps/worker-publish",
+    "native:logs": "npm run pm2:logs:all -w apps/worker-publish",
+    "native:status": "pm2 status",
+    "native:save": "pm2 save"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

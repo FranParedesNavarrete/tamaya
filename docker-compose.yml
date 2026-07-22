@@ -1,9 +1,45 @@
+# Tamaya - Docker Compose único
+#
+# Desarrollo local:
+#   - COMPOSE_PROFILES=local-infra levanta MySQL + Redis locales.
+#   - DATABASE_URL_DOCKER / REDIS_URL_DOCKER apuntan a esos servicios internos.
+#
+# Producción / servicios externos:
+#   - Deja COMPOSE_PROFILES vacío.
+#   - Configura DATABASE_URL_DOCKER y REDIS_URL_DOCKER en .env hacia RDS/Redis externo.
+#   - El YAML no debería tocarse para cambiar infra externa.
+#   - Si quieres web en nginx/puerto 80, cambia `target: dev` por `target: runtime`,
+#     el command del web y el port siguiendo los comentarios del servicio web.
+
 services:
+  # ---------- MySQL local opcional para desarrollo ----------
+  # Se levanta solo con COMPOSE_PROFILES=local-infra.
+  mysql:
+    profiles: ["local-infra"]
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: tamaya
+      MYSQL_USER: tamaya
+      MYSQL_PASSWORD: tamaya
+    ports:
+      - "3306:3306"
+    volumes:
+      - tamaya-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
   redis:
+    profiles: ["local-infra"]
     image: redis:7-alpine
     restart: unless-stopped
+    # Host:6380 para no chocar con otros Redis locales. Dentro de Docker sigue siendo redis:6379.
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT:-6380}:6379"
     volumes:
       - tamaya-redis:/data
     command: ["redis-server", "--appendonly", "yes"]
@@ -17,40 +53,73 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+      target: dev # producción: runtime
     restart: unless-stopped
+    # Construye el dist de los packages que consume la API ANTES de arrancar el
+    # watcher. Necesario porque el bind mount `./packages` de abajo sobrescribe
+    # el dist generado dentro de la imagen: en un repo recién clonado (sin
+    # packages/*/dist en el host) la API fallaría con "Cannot find module
+    # '@tamaya/db'". Producción (runtime) ignora este command.
+    command: sh -c "npm run build -w @tamaya/shared-types && npm run build -w @tamaya/db && npm run dev -w apps/api"
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: redis://redis:6379
+      # URLs vistas DESDE Docker. En local apuntan a los servicios del compose;
+      # en producción/external infra configúralas en .env sin tocar este YAML.
+      DATABASE_URL: ${DATABASE_URL_DOCKER}
+      DATABASE_SSL: ${DATABASE_SSL}
+      REDIS_URL: ${REDIS_URL_DOCKER}
       API_PORT: ${API_PORT}
       API_CORS_ORIGIN: ${API_CORS_ORIGIN}
+      API_AUTH_DISABLED: ${API_AUTH_DISABLED:-false}
+      # URL del control server nativo de worker-publish (fuera de Docker).
+      # host.docker.internal apunta al host. En Linux, ver extra_hosts abajo.
+      TAMAYA_CONTROL_URL: ${TAMAYA_CONTROL_URL:-http://host.docker.internal:3010}
+      TAMAYA_CONTROL_TOKEN: ${TAMAYA_CONTROL_TOKEN:-}
       TAMAYA_TMP_DIR: ${TAMAYA_TMP_DIR}
-      LOG_LEVEL: ${LOG_LEVEL}
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+    # En Linux permite que la API alcance el control server nativo del host.
+    # En Docker Desktop es inocuo y host.docker.internal ya existe.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${API_PORT}:${API_PORT}"
     volumes:
       - ${TAMAYA_TMP_DIR}:${TAMAYA_TMP_DIR}
-    depends_on:
-      redis:
-        condition: service_healthy
+      # Montajes útiles solo en desarrollo:
+      - ./apps/api:/app/apps/api
+      - ./packages:/app/packages
+      - /app/node_modules
+    # Sin depends_on de mysql/redis para permitir servicios externos gestionados
+    # por .env. Si usas infra local, COMPOSE_PROFILES=local-infra levanta mysql/redis.
 
   worker-resolve:
     build:
       context: .
       dockerfile: apps/worker-resolve/Dockerfile
+      target: dev # producción: runtime
     restart: unless-stopped
+    # Igual que la API: construimos el dist de los packages consumidos antes de
+    # arrancar el watcher, porque el bind mount `./packages` tapa el dist de la
+    # imagen. Producción (runtime) ignora este command.
+    command: sh -c "npm run build -w @tamaya/shared-types && npm run build -w @tamaya/db && npm run build -w @tamaya/media-resolver && npm run dev -w apps/worker-resolve"
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: redis://redis:6379
+      # URLs vistas DESDE Docker. En local apuntan a los servicios del compose;
+      # en producción/external infra configúralas en .env sin tocar este YAML.
+      DATABASE_URL: ${DATABASE_URL_DOCKER}
+      DATABASE_SSL: ${DATABASE_SSL}
+      REDIS_URL: ${REDIS_URL_DOCKER}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       AWS_REGION: ${AWS_REGION}
       TAMAYA_TMP_DIR: ${TAMAYA_TMP_DIR}
-      LOG_LEVEL: ${LOG_LEVEL}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       - ${TAMAYA_TMP_DIR}:${TAMAYA_TMP_DIR}
-    depends_on:
-      redis:
-        condition: service_healthy
+      # Montajes útiles solo en desarrollo:
+      - ./apps/worker-resolve:/app/apps/worker-resolve
+      - ./packages:/app/packages
+      - /app/node_modules
+    # Sin depends_on de mysql/redis para permitir servicios externos gestionados
+    # por .env. Si usas infra local, COMPOSE_PROFILES=local-infra levanta mysql/redis.
     deploy:
       replicas: 3
 
@@ -58,13 +127,28 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      target: dev # producción: runtime
       args:
         VITE_API_BASE_URL: "${APP_URL}:${API_PORT}"
     restart: unless-stopped
+    # El web (Vite) solo consume @tamaya/shared-types; lo construimos antes de
+    # arrancar el dev server porque el bind mount `./packages` tapa el dist de
+    # la imagen. Producción (runtime/nginx) ignora este command.
+    command: sh -c "npm run build -w @tamaya/shared-types && npm run dev -w apps/web -- --host 0.0.0.0" # producción: comentar esta línea
+    environment:
+      VITE_API_BASE_URL: "${APP_URL}:${API_PORT}"
     ports:
-      - "80:80"
+      # Desarrollo Vite. Ajusta WEB_PORT en .env si 5173 está ocupado.
+      - "${WEB_PORT:-5173}:5173"
+      # Producción/nginx: comenta la línea anterior y descomenta esta:
+      # - "80:80"
+    volumes:
+      # Montajes útiles solo en desarrollo. En producción puedes comentarlos.
+      - ./apps/web:/app/apps/web
+      - /app/node_modules
     depends_on:
       - api
 
 volumes:
+  tamaya-mysql:
   tamaya-redis:

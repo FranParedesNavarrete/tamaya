@@ -15,18 +15,17 @@ export interface ResolveJobData {
 
 export interface PublishJobData {
   jobId: string;
+  scheduledAt?: string;   // ISO; si viene, publish se retrasa hasta esa fecha
 }
 
 /**
- * Encola un job a la cola "resolve" con delay según scheduledAt.
- * BullMQ maneja el delay internamente (jobs se inactivan hasta que toca).
+ * Encola un job a la cola "resolve" INMEDIATAMENTE.
+ * La fecha programada se aplica en publish-queue, no aquí: así la media queda
+ * descargada/resuelta antes de la hora de publicación.
  */
 export async function enqueueResolve(data: ResolveJobData): Promise<void> {
-  const delay = Math.max(0, new Date(data.scheduledAt).getTime() - Date.now());
-
   await resolveQueue.add('resolve', data, {
     jobId: data.jobId,   // idempotencia
-    delay,
     attempts: 3,
     backoff: {
       type: 'exponential',
@@ -38,8 +37,12 @@ export async function enqueueResolve(data: ResolveJobData): Promise<void> {
 }
 
 export async function enqueuePublish(data: PublishJobData): Promise<void> {
+  const delay = data.scheduledAt
+    ? Math.max(0, new Date(data.scheduledAt).getTime() - Date.now())
+    : 0;
   await publishQueue.add('publish', data, {
     jobId: data.jobId,
+    delay,
     attempts: 3,
     backoff: {
       type: 'exponential',
@@ -48,6 +51,20 @@ export async function enqueuePublish(data: PublishJobData): Promise<void> {
     removeOnComplete: { count: 1000 },
     removeOnFail: { count: 5000 },
   });
+}
+
+/**
+ * Reencola un job en publish-queue de forma manual (acción operativa).
+ * Elimina primero cualquier job previo con el mismo id — si no, BullMQ ignora
+ * el add por idempotencia (removeOnComplete/Fail conserva ids un tiempo).
+ */
+export async function requeuePublish(jobId: string): Promise<void> {
+  try {
+    await publishQueue.remove(jobId);
+  } catch {
+    // no existía o no se pudo quitar — seguimos, el add crea uno nuevo
+  }
+  await enqueuePublish({ jobId });
 }
 
 export async function closeQueue(): Promise<void> {

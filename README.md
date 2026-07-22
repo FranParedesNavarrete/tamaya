@@ -427,7 +427,8 @@ Si los cuatro pasan, programa un job de texto desde la UI y mira `pm2 logs tamay
 5. Desde la lista:
    - **Reintentar**: duplica el job con fecha nueva.
    - **Cancelar**: solo en `pending` / `ready` / `failed`.
-   - **Borrar**: solo si no está en curso.
+   - **Borrar**: *soft-delete* — solo si no está en curso. La fila no se elimina
+     de la BD; se marca `deletedAt` y deja de aparecer en listados y métricas.
 
 ### Dashboard
 
@@ -447,13 +448,292 @@ Si los cuatro pasan, programa un job de texto desde la UI y mira `pm2 logs tamay
 
 ---
 
+## Seguridad API (Bearer token)
+
+La API se puede proteger con un token Bearer. Comportamiento:
+
+- **Sin token configurado** → la API está abierta (permite el bootstrap y el
+  primer arranque). `/health` siempre es público.
+- **Con token configurado** → todos los endpoints exigen token, salvo
+  `GET /health` y `GET /settings/security`. Sin token válido devuelven `401`.
+
+### Levantar en local
+
+```bash
+docker compose up -d --build
+# App web:  http://localhost:${WEB_PORT}   (por defecto 5173)
+# API:      http://localhost:3001
+```
+
+### Generar el token desde Ajustes
+
+1. Abre la web → **Ajustes** (icono en la navbar).
+2. Sección **Seguridad API** → **Generar primer token**.
+3. Copia el token: **solo se muestra una vez**. Se guarda automáticamente en
+   este navegador (`localStorage: tamaya_api_token`) para que la UI siga
+   llamando a la API.
+4. Para **rotar**, pulsa *Rotar token* (pide confirmación). El token anterior
+   queda invalidado.
+
+Solo se persiste el **hash** del token (SHA-256) en la tabla `app_settings`;
+el token plano nunca se almacena.
+
+### Generar el token por API (sin UI)
+
+```bash
+# Solo funciona mientras NO haya token configurado (bootstrap):
+curl -sX POST http://localhost:3001/settings/security/api-token
+# → {"token":"tamaya_xxxxxxxx...","shownOnce":true}
+
+# Estado (público):
+curl -s http://localhost:3001/settings/security
+# → {"apiTokenConfigured":true}
+```
+
+### Llamar a la API con token
+
+```bash
+# Sin token (con token ya configurado) → 401
+curl -i http://localhost:3001/jobs
+
+# Con token → 200
+curl -i -H "Authorization: Bearer tamaya_xxxxxxxx..." http://localhost:3001/jobs
+# Alternativa: -H "X-API-Token: tamaya_xxxxxxxx..."
+```
+
+> **Desarrollo:** `API_AUTH_DISABLED=true` en `.env` desactiva el guard por
+> completo. **No usar en producción.**
+
+### Nota Ubuntu Server / headless
+
+Tamaya está pensada para desplegarse en servidor headless. Evita flujos que
+dependan de ventanas o navegadores visibles en la máquina. Desde la Iteración 2
+la vinculación de WhatsApp puede hacerse por QR **desde la UI** (ver abajo);
+también sigue disponible copiar la sesión (ver *Despliegue en servidor Linux*).
+
+---
+
+## WhatsApp desde la UI, selectores editables y embed (Iteración 2)
+
+### Control server (worker-publish nativo)
+
+La administración de la sesión de WhatsApp (estado / login QR / reset) la sirve
+un **control server** HTTP local que corre NATIVO en el host (usa Playwright/
+Chromium sobre el mismo perfil que el publisher). La API (en Docker) actúa de
+gateway protegido y lo alcanza vía `TAMAYA_CONTROL_URL`.
+
+Arrancarlo en Ubuntu:
+
+```bash
+npm install
+npx playwright install chromium
+npm run build
+# a mano:
+npm run control -w apps/worker-publish
+# o con pm2:
+cd apps/worker-publish && npm run pm2:control:start
+```
+
+Variables (`.env`):
+
+```env
+# macOS/Desktop: 127.0.0.1 vale. Ubuntu + API en Docker: usa 0.0.0.0
+# para que el contenedor llegue vía host.docker.internal/host-gateway.
+TAMAYA_CONTROL_HOST=0.0.0.0
+TAMAYA_CONTROL_PORT=3010
+TAMAYA_CONTROL_URL=http://host.docker.internal:3010
+# Obligatorio si TAMAYA_CONTROL_HOST no es loopback. Genera con: openssl rand -hex 32
+TAMAYA_CONTROL_TOKEN=pon-un-token-largo-aqui
+TAMAYA_HEADLESS=true        # en servidor sin display
+```
+
+**Docker sobre Linux:** `docker-compose.yml` ya añade `host.docker.internal:host-gateway` en el servicio `api` para que pueda llegar al control server nativo. Si expones el control server en `0.0.0.0`, protégelo con `TAMAYA_CONTROL_TOKEN` y firewall.
+
+> **Bloqueo de perfil:** el control server y `worker-publish` comparten
+> `userDataDir` y Chromium no admite dos procesos sobre el mismo perfil. Haz la
+> vinculación cuando no haya publicaciones en curso (idealmente
+> `pm2 stop tamaya-worker-publish` durante el login y arráncalo de nuevo al
+> terminar).
+
+### Vincular WhatsApp por QR desde la UI
+
+1. Arranca el control server nativo (arriba).
+2. Web → **Ajustes → WhatsApp**.
+3. **Iniciar vinculación** → aparece el QR (polling cada ~2,5 s).
+4. Móvil → *Dispositivos vinculados → Vincular un dispositivo* → escanea.
+5. Cuando el estado pase a **Listo**, reinicia `worker-publish`.
+6. **Resetear sesión** cierra el navegador y borra el perfil (no toca la BD).
+
+Si WhatsApp bloquea el QR en headless por fingerprint, ejecuta el control server
+bajo **Xvfb** (no hace falta abrir ninguna ventana en local):
+
+```bash
+xvfb-run -a npm run control -w apps/worker-publish
+```
+
+### Selectores editables
+
+Web → **Ajustes → Selectores WhatsApp**. Permite guardar *overrides* de los
+selectores del DOM sin tocar código, para sobrevivir a cambios de WhatsApp:
+
+- Los **defaults** viven en el código (`@tamaya/shared-types` +
+  `packages/core/src/browser/selectors.ts`) y se mantienen como fallback.
+- Los overrides se guardan en `app_settings` (clave `selectors.overrides`) como
+  JSON: `{ "appReady": ["#pane-side"], "sendButton": ["div[role='button'][aria-label^='Send']"] }`.
+- Solo son editables las claves de tipo **array**. Los selectores **dinámicos**
+  (`channelRowByName`, `messageComposerForChannel`) son funciones y NO son
+  editables (mantienen defaults).
+- Los cambios se aplican al **arrancar** worker-publish / control server →
+  **reinicia el worker** tras guardar.
+
+API equivalente: `GET/PUT/POST /settings/selectors` (ver `docs/API.md`).
+
+### Modo embed
+
+Añade `?embed=1` a cualquier ruta para ocultar navbar y controles globales
+(útil para incrustar en iframe):
+
+```txt
+http://localhost:${WEB_PORT}/jobs?embed=1
+```
+
+El flag se recuerda durante la sesión del navegador (`?embed=0` lo desactiva).
+El modo embed **no** cambia la seguridad: las llamadas a la API siguen
+necesitando el API token. No hay aún tokens temporales ni scopes.
+
+---
+
+## Pipeline, diagnóstico y operación (Iteración 3)
+
+### El pipeline de un job
+
+```
+POST /jobs → resolve-queue → (status: resolving → ready) → publish-queue → worker-publish → sent
+```
+
+Un job en **`ready`** está resuelto y **esperando a que `worker-publish` lo
+consuma**. Si `worker-publish` (nativo) no está corriendo, el job se queda en
+`ready`/en cola y **no se publica** — esto es lo esperado, no un error.
+
+### Diagnóstico
+
+Endpoints protegidos (ver `docs/API.md`):
+
+- `GET /ops/queues` — conteos BullMQ de `resolve`/`publish`.
+- `GET /ops/publisher` — si worker-publish está consumiendo, heartbeat, y un
+  `message` explicativo (p.ej. *"Hay jobs listos pero worker-publish no está
+  consumiendo"*).
+- `GET /ops/health` — salud de DB/Redis/control server/publisher.
+
+En la UI: **Jobs → Ver diagnóstico** (o **Ajustes → Diagnóstico del pipeline**)
+muestra colas, heartbeat y estado. Si hay jobs `ready` y el publisher está
+offline, Jobs muestra un **banner** indicándolo.
+
+**Heartbeat:** `worker-publish` y `control-server` escriben su latido en
+`app_settings` (`worker.publish.heartbeat` / `worker.control.heartbeat`) cada
+~12 s. La API considera el proceso *online* si el latido tiene < 30 s.
+
+### Reencolar una publicación
+
+Si un job quedó `failed`/`ready` por un problema operativo ya resuelto (worker
+parado, perfil bloqueado), **Reencolar publicación** (UI) o
+`POST /jobs/:id/requeue-publish` lo vuelve a poner en `publish-queue` sin
+duplicarlo. Requiere `worker-publish` activo para que se envíe.
+
+### Verificación de publicación (anti-falsos-fallos / anti-duplicados)
+
+Tras pulsar **Send**, el worker verifica el **contenido real** del hilo (no solo
+los ticks `msg-check`, que WhatsApp Channels no siempre muestra):
+
+- **`sent`** solo si hay evidencia de un item nuevo y —si aplicaba— el
+  **texto/caption** aparece en el hilo y la **media** se detecta.
+- Si el fallo es **antes** de pulsar Send (sesión, canal, adjuntar, preview…),
+  el job se **reintenta** (aún no se publicó nada).
+- Si es **después** de pulsar Send y no se puede confirmar el contenido, el job
+  se marca **`failed`** con `lastError` que empieza por
+  `POST_SEND_VERIFICATION_FAILED` y **NO se reintenta** (para no duplicar). La UI
+  muestra un aviso claro y guardamos `verificationMeta` (auditoría) en el job.
+
+Timeouts de subida configurables por `.env` (aplican al caso más lento, vídeo):
+
+```env
+TAMAYA_MEDIA_UPLOAD_TIMEOUT_MAX_MS=1800000    # tope duro (30 min)
+TAMAYA_MEDIA_UPLOAD_TIMEOUT_PER_MB_MS=6000     # margen por MB
+```
+
+Si no se definen o no son válidos, se usan esos defaults (con warning en logs).
+
+### Lock de perfil de WhatsApp
+
+`control-server` y `worker-publish` comparten `TAMAYA_USER_DATA_DIR` y Chromium
+no admite dos procesos sobre el mismo perfil. Ahora hay un **lock explícito**
+(`sessions/default-profile/.tamaya-profile.lock`): quien abre Chromium adquiere
+el lock y lo libera al cerrar. Si el otro proceso lo tiene, el que llega recibe
+un error claro (*"El perfil de WhatsApp está ocupado por control-server…"*) en
+lugar de un crash de Chromium. Los locks *stale* (PID muerto) se sobrescriben.
+
+### Operación en Ubuntu (autoarranque tras boot)
+
+Los procesos **nativos** (`worker-publish` + `control-server`) se gestionan con
+**PM2** y sobreviven a reinicios. Docker levanta API/web/worker-resolve/infra
+por sus *restart policies*; PM2 (vía systemd) levanta los nativos. Tras el boot
+la app queda lista **sin abrir ninguna terminal**.
+
+Instalación y arranque (una vez):
+
+```bash
+npm install
+npx playwright install chromium
+sudo npx playwright install-deps chromium     # deps de sistema (Ubuntu)
+
+npm run build
+docker compose up -d --build                   # API / web / worker-resolve / infra
+
+npm run native:start                           # worker-publish + control-server (PM2)
+pm2 startup                                    # imprime un comando con sudo → ejecútalo
+pm2 save                                        # persiste la lista para el boot
+```
+
+O usa el helper (comprueba requisitos, compila y arranca; imprime `pm2 startup`/`save`):
+
+```bash
+bash scripts/setup-native.sh
+```
+
+Scripts operativos (desde la raíz):
+
+| Script | Acción |
+| ------ | ------ |
+| `npm run native:start`   | Arranca ambos procesos bajo PM2 (`ecosystem.config.cjs`). |
+| `npm run native:stop`    | Para ambos. |
+| `npm run native:restart` | Reinicia ambos. |
+| `npm run native:logs`    | Logs de ambos. |
+| `npm run native:status`  | `pm2 status`. |
+| `npm run native:save`    | `pm2 save` (persistir para el boot). |
+
+- **QR y publicación conviven:** ambos procesos pueden estar siempre vivos. El
+  **lock de perfil** impide que abran Chromium a la vez y da un error claro si
+  coinciden; ya **no** hace falta parar el publisher para vincular.
+- Si `pm2` no está global: `npm install -g pm2` (ver aviso en *Antes de clonar*).
+
+Verifica en la UI (**Ajustes → Diagnóstico del pipeline**) o por API
+(`GET /ops/publisher`) que `publisherOnline: true` tras `native:start`.
+
+---
+
 ## Desarrollo
 
-Modo dev (hot reload en api, web, worker-resolve) gracias al `docker-compose.override.yml`:
+Modo dev (hot reload en api, web, worker-resolve) directamente con el
+`docker-compose.yml` único (los servicios arrancan con `npm run dev` y montan
+el código del host):
 
 ```bash
 docker compose up                # sin -d, ves logs en vivo
 ```
+
+> Los servicios dev construyen el `dist` de los packages que consumen **antes**
+> de arrancar el watcher, así que un repo recién clonado (sin `packages/*/dist`)
+> levanta sin errores de imports.
 
 El `worker-publish` se lanza fuera de Docker, en `tsx watch`:
 

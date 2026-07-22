@@ -4,7 +4,7 @@ REST API para integrar Tamaya en otras aplicaciones: crear canales, programar jo
 
 - **Base URL (dev):** `http://localhost:3001`
 - **Content-Type:** `application/json` (salvo `/media/upload` que es `multipart/form-data`)
-- **Auth:** *actualmente sin autenticación.* Pensado para uso en LAN / localhost. Ver [Roadmap](#roadmap) si vas a exponer la API públicamente.
+- **Auth:** Bearer token opcional. Si hay un API token configurado (ver `POST /settings/security/api-token`), todos los endpoints exigen `Authorization: Bearer <token>` (o `X-API-Token: <token>`), salvo `GET /health` y `GET /settings/security`. Sin token configurado la API está abierta. Ver [Seguridad API](../README.md#seguridad-api-bearer-token) en el README.
 
 ---
 
@@ -23,7 +23,8 @@ REST API para integrar Tamaya en otras aplicaciones: crear canales, programar jo
 | GET    | `/jobs`                       | Listar/buscar jobs con filtros                    |
 | GET    | `/jobs/:id`                   | Obtener un job                                    |
 | POST   | `/jobs/:id/cancel`            | Cancelar un job pendiente                         |
-| DELETE | `/jobs/:id`                   | Borrar un job                                     |
+| POST   | `/jobs/:id/requeue-publish`   | Reencolar en publish-queue (ready/failed)         |
+| DELETE | `/jobs/:id`                   | Soft-delete de un job (marca `deletedAt`)         |
 | GET    | `/stats/summary`              | Métricas globales                                 |
 | GET    | `/stats/by-status`            | Conteo por status                                 |
 | GET    | `/stats/by-channel`           | Top canales                                       |
@@ -32,6 +33,20 @@ REST API para integrar Tamaya en otras aplicaciones: crear canales, programar jo
 | GET    | `/stats/hourly-heatmap`       | Actividad por día × hora                          |
 | GET    | `/stats/duration-distribution`| Histograma de duración                            |
 | GET    | `/stats/recent-failures`      | Últimos fallos con su error                       |
+| GET    | `/settings/security`          | Estado del API token (`{ apiTokenConfigured }`)   |
+| POST   | `/settings/security/api-token`| Generar/rotar API token (devuelto una sola vez)   |
+| GET    | `/settings/whatsapp/status`   | Estado sesión/login (proxy control server)        |
+| POST   | `/settings/whatsapp/login/start` | Inicia vinculación headless (proxy)            |
+| GET    | `/settings/whatsapp/login/qr` | QR actual `{ qrDataUrl?, state }` (proxy)         |
+| POST   | `/settings/whatsapp/session/reset` | Resetea la sesión de WhatsApp (proxy)        |
+| GET    | `/settings/selectors`         | Defaults/overrides/effective + claves editables   |
+| PUT    | `/settings/selectors`         | Guardar overrides (valida claves y arrays)        |
+| POST   | `/settings/selectors/reset`   | Borrar overrides (vuelve a defaults)              |
+| GET    | `/ops/queues`                 | Conteos BullMQ de resolve/publish                 |
+| GET    | `/ops/publisher`              | ¿Está worker-publish consumiendo? + heartbeat     |
+| GET    | `/ops/health`                 | Salud de DB/Redis/control server/publisher        |
+
+Nota del control server: en Ubuntu con la API dentro de Docker, el servicio nativo de `worker-publish` debe ser alcanzable desde el contenedor (`TAMAYA_CONTROL_HOST=0.0.0.0` o bind equivalente) y protegido con `TAMAYA_CONTROL_TOKEN`. La UI nunca llama directamente a ese servicio; siempre pasa por la API protegida.
 
 ---
 
@@ -158,7 +173,7 @@ curl -X POST http://localhost:3001/media/upload \
 
 ### POST /jobs
 
-Crea un job programado. Una vez creado, pasa por la cola `resolve` (descarga media si hace falta) y luego por `publish` (envía a WA Web).
+Crea un job programado o inmediato. Una vez creado, Tamaya resuelve/descarga la media **inmediatamente** y encola la publicación en `publish-queue` con delay hasta la fecha. Si muchos jobs tienen la misma hora, se publican de uno en uno respetando `enqueueSeq` (orden de entrada).
 
 **Body:**
 
@@ -167,9 +182,13 @@ Crea un job programado. Una vez creado, pasa por la cola `resolve` (descarga med
 | `channelId`   | UUID             | ✅              | Id devuelto por `POST /channels` o `GET /channels`.         |
 | `text`        | string           | ⬜ *            | Texto del mensaje. Se usa como caption si hay media.        |
 | `media`       | `MediaSource[]`  | ⬜ *            | Array de `{ source: string }`. Mínimo 0.                    |
-| `scheduledAt` | ISO 8601         | ✅              | Fecha/hora de publicación. Para "ahora" manda `new Date().toISOString()`. |
+| `datetime`    | `YYYY-MM-DD HH:mm:ss` | ⬜ **      | Recomendado para n8n/Laravel. Se interpreta como hora local `Europe/Madrid`. |
+| `publishNow`  | boolean          | ⬜ **           | `true` para publicar inmediatamente.                         |
+| `scheduledAt` | ISO 8601 o `now` | ⬜ **           | Compatibilidad. ISO con timezone; también acepta `now`.       |
 
 \* **Al menos uno de `text` o `media` es obligatorio.** Si mandas los dos vacíos → `400`.
+
+\** Debes enviar **uno** de `datetime`, `publishNow` o `scheduledAt`.
 
 **`MediaSource.source`** admite tres formatos:
 
@@ -181,28 +200,27 @@ Crea un job programado. Una vez creado, pasa por la cola `resolve` (descarga med
 
 ```bash
 curl -X POST http://localhost:3001/jobs \
-  -H "Content-Type: application/json" \
-  -d "$(cat <<JSON
-{
-  "channelId": "6b4f1b2a-5e0f-4c3a-a8a1-0c2a6ad3e4d9",
-  "text": "Hola desde la API",
-  "media": [],
-  "scheduledAt": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
-}
-JSON
-)"
-```
-
-**Ejemplo 2 — imagen por URL + caption, programado:**
-
-```bash
-curl -X POST http://localhost:3001/jobs \
+  -H "Authorization: Bearer TU_TOKEN_API" \
   -H "Content-Type: application/json" \
   -d '{
     "channelId": "6b4f1b2a-5e0f-4c3a-a8a1-0c2a6ad3e4d9",
-    "text": "Mira esta foto",
-    "media": [{ "source": "https://example.com/foto.jpg" }],
-    "scheduledAt": "2026-04-20T18:00:00.000Z"
+    "text": "Hola desde la API",
+    "media": [],
+    "publishNow": true
+  }'
+```
+
+**Ejemplo 2 — imagen por URL + caption, programado en hora Madrid:**
+
+```bash
+curl -X POST http://localhost:3001/jobs \
+  -H "Authorization: Bearer TU_TOKEN_API" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "channelId": "6b4f1b2a-5e0f-4c3a-a8a1-0c2a6ad3e4d9",
+    "text": "🌅 Plan cultural para esta tarde\n\nMúsica en directo y entrada gratuita.",
+    "media": [{ "source": "https://www.wikimedia.org/static/images/wmf-logo.png" }],
+    "datetime": "2026-07-22 21:00:00"
   }'
 ```
 
@@ -220,7 +238,7 @@ curl -X POST http://localhost:3001/jobs \
     \"channelId\": \"6b4f1b2a-5e0f-4c3a-a8a1-0c2a6ad3e4d9\",
     \"text\": \"Novedades de hoy\",
     \"media\": [{ \"source\": \"$SOURCE\" }],
-    \"scheduledAt\": \"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\"
+    \"publishNow\": true
   }"
 ```
 
@@ -231,7 +249,7 @@ curl -X POST http://localhost:3001/jobs \
 ```
 
 **Errores:**
-- `400` — body inválido (ej. `text` y `media` ambos vacíos, `scheduledAt` no es ISO).
+- `400` — body inválido (ej. `text` y `media` ambos vacíos, o falta `datetime`/`publishNow`/`scheduledAt`).
 - `404` — el `channelId` no existe.
 
 ### GET /jobs
@@ -290,7 +308,7 @@ Marca un job como `cancelled`. **No sirve** para jobs en estados `publishing` o 
 
 ### DELETE /jobs/:id
 
-Borrado real de la fila. Igual restricción: no se puede borrar un job en curso → `409`.
+*Soft-delete*: marca `deletedAt` y la fila deja de aparecer en listados, detalle y métricas (nunca se borra físicamente). Igual restricción: no se puede borrar un job en curso → `409`. Un job ya eliminado devuelve `404`.
 
 **Respuesta 200:**
 
@@ -537,6 +555,36 @@ print(send_now("6b4f1b2a-...", "Hola desde Python", "./foto.jpg"))
     "scheduledAt": "{{ $now.toISO() }}"
   }
   ```
+
+---
+
+## Integración Kanban
+
+Para publicar una tarjeta de un Kanban como mensaje del canal, basta con
+`POST /jobs` (con el token Bearer si está configurado):
+
+```bash
+curl -X POST http://localhost:3001/jobs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "channelId": "6b4f1b2a-5e0f-4c3a-a8a1-0c2a6ad3e4d9",
+    "text": "contenido de la tarjeta",
+    "media": [{ "source": "https://…/imagen.jpg" }],
+    "scheduledAt": "2026-07-22T09:00:00.000Z"
+  }'
+```
+
+`media[].source` acepta `https://…`, `s3://bucket/key` o ruta local absoluta;
+worker-resolve la descarga. Sigue el estado con `GET /jobs/:id` (`sent` /
+`failed`) o `GET /ops/publisher` para saber si el publisher está consumiendo.
+
+**Recomendación futura (no implementada aún):** añadir un
+`externalId`/`idempotencyKey` en `POST /jobs` para que reintentos del Kanban no
+creen jobs duplicados. Hoy la de-duplicación hay que hacerla en el lado del
+integrador (no reenviar la misma tarjeta). El pipeline interno **sí** evita
+duplicar en el envío: un fallo tras pulsar Send no se reintenta automáticamente
+(ver `verificationMeta` y `POST_SEND_VERIFICATION_FAILED` en el README).
 
 ---
 

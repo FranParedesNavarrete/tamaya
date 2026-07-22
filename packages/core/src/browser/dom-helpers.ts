@@ -7,6 +7,7 @@
  * - Logs claros de qué selector ha ganado (útil para el hotfix playbook).
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { platform } from 'node:os';
 import { join } from 'node:path';
 import type { Locator, Page } from 'playwright';
 import { logger } from '../logger.js';
@@ -157,5 +158,47 @@ export async function typeMultiline(
     if (lines[i].length > 0) {
       await locator.pressSequentially(lines[i], { delay });
     }
+  }
+}
+
+/**
+ * Reemplaza todo el texto de un contenteditable de WhatsApp de forma robusta.
+ * Para textos largos con saltos de línea, la vía más estable es: limpiar
+ * composer → copiar al clipboard → pegar. Si el clipboard falla, usamos el
+ * fallback histórico con Shift+Enter.
+ */
+export async function replaceEditableText(
+  page: Page,
+  locator: Locator,
+  body: string,
+  opts: { delayMs?: number } = {},
+): Promise<void> {
+  await locator.click();
+  await page.waitForTimeout(100);
+  await clearEditable(page, locator);
+
+  try {
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], {
+      origin: 'https://web.whatsapp.com',
+    });
+    await page.evaluate(async (text) => {
+      await (globalThis as any).navigator.clipboard.writeText(text);
+    }, body);
+    await locator.click();
+    await page.keyboard.press(platform() === 'darwin' ? 'Meta+V' : 'Control+V');
+    await page.waitForTimeout(300);
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'clipboard paste failed — falling back to multiline typing');
+    await typeMultiline(page, locator, body, opts);
+  }
+}
+
+/** Limpia un contenteditable evitando que un retry escriba encima del intento anterior. */
+export async function clearEditable(page: Page, locator: Locator): Promise<void> {
+  await locator.click();
+  for (let i = 0; i < 2; i += 1) {
+    await page.keyboard.press(platform() === 'darwin' ? 'Meta+A' : 'Control+A');
+    await page.keyboard.press('Backspace');
+    await page.waitForTimeout(100);
   }
 }

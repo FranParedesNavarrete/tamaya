@@ -7,17 +7,62 @@ import type {
 // docker-compose.yml. Fallback a localhost para dev fuera de Docker.
 const BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
 
+// Clave del token de API en localStorage. La UI lo guarda tras generarlo en
+// Ajustes y lo envía en cada petición como `Authorization: Bearer <token>`.
+export const API_TOKEN_STORAGE_KEY = 'tamaya_api_token';
+
+export function getStoredToken(): string | null {
+  try {
+    return localStorage.getItem(API_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredToken(token: string): void {
+  localStorage.setItem(API_TOKEN_STORAGE_KEY, token);
+}
+
+export function clearStoredToken(): void {
+  localStorage.removeItem(API_TOKEN_STORAGE_KEY);
+}
+
+/** Error de API con el status HTTP para que la UI pueda reaccionar (ej. 401). */
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+/** Añade el header Authorization si hay token guardado. */
+export function authHeaders(base: Record<string, string> = {}): Record<string, string> {
+  const token = getStoredToken();
+  if (token) base['Authorization'] = `Bearer ${token}`;
+  return base;
+}
+
+/** Notifica a la app un 401 para mostrar el aviso "ve a Ajustes". */
+function notifyUnauthorized(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('tamaya:unauthorized'));
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   // Solo enviamos Content-Type cuando hay body. Fastify rechaza requests con
   // `Content-Type: application/json` y body vacío (ej. DELETE, POST cancel).
-  const headers: Record<string, string> = { ...(init?.headers as Record<string, string> ?? {}) };
+  const headers = authHeaders({ ...(init?.headers as Record<string, string> ?? {}) });
   if (init?.body && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json';
   }
   const r = await fetch(`${BASE}${path}`, { ...init, headers });
   if (!r.ok) {
     const body = await r.text().catch(() => '');
-    throw new Error(`${r.status} ${r.statusText}: ${body}`);
+    if (r.status === 401) notifyUnauthorized();
+    throw new ApiError(r.status, `${r.status} ${r.statusText}: ${body}`);
   }
   return r.json();
 }
@@ -81,6 +126,58 @@ export interface RecentFailure {
   attemptCount: number;
 }
 
+export type WhatsAppLoginState = 'idle' | 'starting' | 'qr' | 'authenticated' | 'ready' | 'error';
+export interface WhatsAppStatus {
+  sessionExists: boolean;
+  loginState: WhatsAppLoginState;
+  lastError: string | null;
+  updatedAt: string;
+  headless?: boolean;
+}
+export interface WhatsAppQr {
+  qrDataUrl?: string;
+  state: WhatsAppLoginState;
+}
+export interface SelectorsResponse {
+  defaults: Record<string, string[]>;
+  overrides: Record<string, string[]>;
+  effective: Record<string, string[]>;
+  editableKeys: string[];
+  nonEditableKeys: string[];
+}
+
+export interface QueueCounts {
+  waiting: number;
+  active: number;
+  delayed: number;
+  completed: number;
+  failed: number;
+  paused: number;
+}
+export interface OpsQueues {
+  resolve: QueueCounts;
+  publish: QueueCounts;
+}
+export interface OpsPublisher {
+  controlServerAvailable: boolean;
+  controlOnline: boolean;
+  sessionExists: boolean | null;
+  publisherOnline: boolean;
+  publisherLikelyRunning: boolean;
+  publisherHeartbeat: { pid?: number; hostname?: string; updatedAt?: string; ageMs?: number } | null;
+  publishQueueWaiting: number;
+  publishActive: number;
+  message: string;
+}
+export interface OpsHealth {
+  ok: boolean;
+  db: boolean;
+  redis: boolean;
+  controlServer: boolean;
+  publisherOnline: boolean;
+  ts: string;
+}
+
 export interface JobSearchParams extends StatsRange {
   status?: string;
   q?: string;
@@ -112,6 +209,13 @@ export const api = {
     req<{ id: string; status: string }>(`/jobs/${id}/cancel`, { method: 'POST' }),
   deleteJob: (id: string) =>
     req<{ id: string; deleted: boolean }>(`/jobs/${id}`, { method: 'DELETE' }),
+  requeuePublish: (id: string) =>
+    req<{ id: string; status: string; requeued: boolean }>(`/jobs/${id}/requeue-publish`, { method: 'POST' }),
+
+  // Ops / diagnóstico
+  opsQueues: () => req<OpsQueues>('/ops/queues'),
+  opsPublisher: () => req<OpsPublisher>('/ops/publisher'),
+  opsHealth: () => req<OpsHealth>('/ops/health'),
 
   // Channels
   listChannels: () => req<Channel[]>('/channels'),
@@ -133,13 +237,46 @@ export const api = {
   uploadMedia: async (file: File): Promise<UploadedMedia> => {
     const fd = new FormData();
     fd.append('file', file);
-    const r = await fetch(`${BASE}/media/upload`, { method: 'POST', body: fd });
+    const r = await fetch(`${BASE}/media/upload`, {
+      method: 'POST',
+      body: fd,
+      headers: authHeaders(),
+    });
     if (!r.ok) {
       const body = await r.text().catch(() => '');
-      throw new Error(`${r.status} ${r.statusText}: ${body}`);
+      if (r.status === 401) notifyUnauthorized();
+      throw new ApiError(r.status, `${r.status} ${r.statusText}: ${body}`);
     }
     return r.json();
   },
+
+  // Settings — seguridad API
+  getSecurity: () => req<{ apiTokenConfigured: boolean }>('/settings/security'),
+  generateApiToken: () =>
+    req<{ token: string; shownOnce: boolean }>('/settings/security/api-token', {
+      method: 'POST',
+    }),
+
+  // Settings — WhatsApp (proxy al control server nativo)
+  whatsappStatus: () => req<WhatsAppStatus>('/settings/whatsapp/status'),
+  whatsappLoginStart: () =>
+    req<{ started: boolean; error?: string }>('/settings/whatsapp/login/start', { method: 'POST' }),
+  whatsappQr: () => req<WhatsAppQr>('/settings/whatsapp/login/qr'),
+  whatsappReset: () =>
+    req<{ ok: boolean }>('/settings/whatsapp/session/reset', { method: 'POST' }),
+
+  // Settings — selectores editables
+  getSelectors: () => req<SelectorsResponse>('/settings/selectors'),
+  putSelectors: (overrides: Record<string, string[]>) =>
+    req<{ ok: boolean; overrides: Record<string, string[]>; effective: Record<string, string[]>; note: string }>(
+      '/settings/selectors',
+      { method: 'PUT', body: JSON.stringify(overrides) },
+    ),
+  resetSelectors: () =>
+    req<{ ok: boolean; overrides: Record<string, string[]>; effective: Record<string, string[]>; note: string }>(
+      '/settings/selectors/reset',
+      { method: 'POST' },
+    ),
 
   // Stats
   statsSummary: (range?: StatsRange) =>

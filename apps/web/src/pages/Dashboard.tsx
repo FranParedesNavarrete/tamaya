@@ -99,16 +99,17 @@ export function Dashboard() {
 
   useEffect(() => {
     let alive = true;
-    Promise.all([
-      api.statsSummary(range),
-      api.statsByStatus(range),
-      api.statsByChannel(range),
-      api.statsTimeline({ ...range, granularity }),
-      api.statsMediaTypes(range),
-      api.statsDuration(range),
-      api.statsHeatmap(range),
-      api.statsRecentFailures(8),
-    ]).then(([sm, bs, bc, tl, mt, dr, hm, rf]) => {
+    async function loadStats() {
+      const [sm, bs, bc, tl, mt, dr, hm, rf] = await Promise.all([
+        api.statsSummary(range),
+        api.statsByStatus(range),
+        api.statsByChannel(range),
+        api.statsTimeline({ ...range, granularity }),
+        api.statsMediaTypes(range),
+        api.statsDuration(range),
+        api.statsHeatmap(range),
+        api.statsRecentFailures(8),
+      ]);
       if (!alive) return;
       setSummary(sm);
       setByStatus(bs);
@@ -118,8 +119,10 @@ export function Dashboard() {
       setDurations(dr);
       setHeatmap(hm);
       setFailures(rf);
-    });
-    return () => { alive = false; };
+    }
+    void loadStats();
+    const id = setInterval(() => void loadStats(), 10_000);
+    return () => { alive = false; clearInterval(id); };
   }, [range, granularity]);
 
   // Búsqueda al cambiar cualquiera de los filtros (debounced con efecto)

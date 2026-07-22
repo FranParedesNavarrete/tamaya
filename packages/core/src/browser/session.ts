@@ -11,23 +11,47 @@ import { chromium } from 'playwright';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { getBrowserContextOptions } from './fingerprint.js';
+import { acquireProfileLock, releaseProfileLock, type ProfileLockOwner } from './profile-lock.js';
 
-export async function launchPersistentContextForTenant(): Promise<BrowserContext> {
+/**
+ * Abre el contexto persistente adquiriendo antes el lock de perfil. El lock se
+ * libera automáticamente cuando se cierra el contexto (evento `close`).
+ *
+ * `owner` identifica quién abre (control-server / worker-publish / cli) para
+ * dar mensajes claros si el perfil está ocupado.
+ */
+export async function launchPersistentContextForTenant(
+  owner: ProfileLockOwner = 'worker-publish',
+): Promise<BrowserContext> {
   mkdirSync(config.userDataDir, { recursive: true });
 
-  const options = getBrowserContextOptions();
-  const context = await chromium.launchPersistentContext(config.userDataDir, {
-    headless: config.playwright.headless,
-    slowMo: config.playwright.slowMoMs,
-    args: ['--disable-blink-features=AutomationControlled'],
-    // Fingerprint coherente por tenant (viewport, locale, timezone, UA)
-    viewport: options.viewport,
-    locale: options.locale,
-    timezoneId: options.timezoneId,
-    userAgent: options.userAgent,
-  });
+  // Lanza ProfileLockedError si otro proceso vivo tiene el perfil.
+  acquireProfileLock(owner);
 
-  logger.info({ userDataDir: config.userDataDir }, 'persistent context opened');
+  const options = getBrowserContextOptions();
+  let context: BrowserContext;
+  try {
+    context = await chromium.launchPersistentContext(config.userDataDir, {
+      headless: config.playwright.headless,
+      slowMo: config.playwright.slowMoMs,
+      args: ['--disable-blink-features=AutomationControlled'],
+      // Fingerprint coherente por tenant (viewport, locale, timezone, UA)
+      viewport: options.viewport,
+      locale: options.locale,
+      timezoneId: options.timezoneId,
+      userAgent: options.userAgent,
+    });
+  } catch (err) {
+    // Si Chromium no llega a abrir, no dejamos el lock colgado.
+    releaseProfileLock();
+    throw err;
+  }
+
+  // Liberar el lock cuando el contexto se cierre (finally de publishers,
+  // cleanup del control-server, o cierre manual).
+  context.once('close', () => releaseProfileLock());
+
+  logger.info({ userDataDir: config.userDataDir, owner }, 'persistent context opened');
   return context;
 }
 

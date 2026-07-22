@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 dist/
+.npm-cache/
 
 # Env
 .env
@@ -36,11 +37,13 @@ test-assets/*
 
 # Logs
 logs/
+.logs/
 *.log
 npm-debug.log*
 
 # Debug dumps (screenshot + HTML cuando falla un envío)
 debug/
+**/debug/
 
 # TypeScript build cache
 *.tsbuildinfo

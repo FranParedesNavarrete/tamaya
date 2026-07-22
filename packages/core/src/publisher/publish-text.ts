@@ -23,13 +23,16 @@ import {
   dumpDebugInfo,
   humanPause,
   humanType,
-  typeMultiline,
+  replaceEditableText,
+  clearEditable,
   waitForAny,
   waitForAnyDynamic,
 } from '../browser/dom-helpers.js';
 import { audit, db } from '../db/client.js';
 import { logger } from '../logger.js';
 import { config } from '../config.js';
+import { findLastThreadTexts, findPageVisibleText, normalizeText, textMatchesAny } from './verify.js';
+import type { PublishVerificationMeta } from '@tamaya/shared-types';
 
 export interface PublishTextInput {
   channelIdentifier: {
@@ -46,6 +49,8 @@ export interface PublishResult {
   messageId: string;
   debugDump?: string;
   error?: string;
+  verificationMeta?: PublishVerificationMeta;
+  postSendMaybeDelivered?: boolean;
 }
 
 export async function publishText(input: PublishTextInput): Promise<PublishResult> {
@@ -73,6 +78,13 @@ export async function publishText(input: PublishTextInput): Promise<PublishResul
 
   const context = await launchPersistentContextForTenant();
   let debugDump: string | undefined;
+  let sendClicked = false;
+
+  const expected: PublishVerificationMeta['expected'] = {
+    hasText: true,
+    textLength: input.body.length,
+    hasMedia: false,
+  };
 
   try {
     const page = context.pages()[0] ?? (await context.newPage());
@@ -84,23 +96,55 @@ export async function publishText(input: PublishTextInput): Promise<PublishResul
     await waitForAny(page, SELECTORS.appReady, { timeout: 60_000 });
 
     await navigateToChannel(page, input.channelIdentifier);
-    await typeAndSend(page, input.body);
 
-    // Verificación básica: el texto aparece en el hilo
-    const verified = await verifyLastTextMessage(page, input.body);
-    if (!verified) {
-      throw new Error(
-        'post-send verification failed — message sent but not found in thread',
-      );
+    // ---- PUNTO DE NO RETORNO: typeAndSend pulsa Send. ----
+    await typeAndSend(page, input.body);
+    sendClicked = true;
+
+    // Verificación de contenido: el texto aparece en el hilo (tolerante).
+    const texts = await findLastThreadTexts(page, 5);
+    const pageText = await findPageVisibleText(page);
+    const textMatched = textMatchesAny(input.body, [...texts, pageText]);
+    const durationMs = Date.now() - started;
+    const observed: PublishVerificationMeta['observed'] = {
+      previewClosed: true,           // no hay preview en texto plano
+      sendClicked: true,
+      indicatorAppeared: false,
+      threadItemAppeared: texts.length > 0,
+      textMatched,
+      mediaDetected: 'unknown',
+      uploadPendingCleared: 'unknown',
+    };
+
+    if (textMatched) {
+      const verificationMeta: PublishVerificationMeta = {
+        expected, observed, result: 'verified', checkedAt: new Date().toISOString(),
+      };
+      db.prepare(
+        `UPDATE messages SET status='sent', sent_at=datetime('now'), duration_ms=? WHERE id=?`,
+      ).run(durationMs, messageId);
+      audit('system', 'publish_text_success', messageId, { durationMs });
+      return { success: true, durationMs, messageId, verificationMeta };
     }
 
-    const durationMs = Date.now() - started;
+    // Enviado pero no confirmado → ambiguo, NO reintentar (posible duplicado).
+    const page0 = context.pages()[0];
+    if (page0) {
+      try { debugDump = await dumpDebugInfo(page0, 'publish-text-verify'); } catch { /* logged */ }
+    }
+    const verificationMeta: PublishVerificationMeta = {
+      expected, observed, result: 'ambiguous_after_send',
+      reason: 'texto no confirmado en el hilo tras enviar', checkedAt: new Date().toISOString(),
+    };
     db.prepare(
-      `UPDATE messages SET status='sent', sent_at=datetime('now'), duration_ms=? WHERE id=?`,
-    ).run(durationMs, messageId);
-    audit('system', 'publish_text_success', messageId, { durationMs });
-
-    return { success: true, durationMs, messageId };
+      `UPDATE messages SET status='failed', last_error=?, duration_ms=?, attempted_count=attempted_count+1 WHERE id=?`,
+    ).run('post-send verification not confirmed', durationMs, messageId);
+    logger.warn({ observed }, 'publishText post-send verification not confirmed');
+    return {
+      success: false, durationMs, messageId,
+      error: 'post-send verification not confirmed', debugDump,
+      verificationMeta, postSendMaybeDelivered: true,
+    };
   } catch (err) {
     const page = context.pages()[0];
     if (page) {
@@ -116,8 +160,22 @@ export async function publishText(input: PublishTextInput): Promise<PublishResul
       `UPDATE messages SET status='failed', last_error=?, duration_ms=?, attempted_count=attempted_count+1 WHERE id=?`,
     ).run(errMsg, durationMs, messageId);
     audit('system', 'publish_text_failed', messageId, { error: errMsg });
-    logger.error({ err }, 'publishText failed');
-    return { success: false, durationMs, messageId, error: errMsg, debugDump };
+    logger.error({ err, sendClicked }, 'publishText failed');
+    const verificationMeta: PublishVerificationMeta | undefined = sendClicked
+      ? {
+          expected,
+          observed: {
+            previewClosed: true, sendClicked: true, indicatorAppeared: false,
+            threadItemAppeared: false, textMatched: 'unknown', mediaDetected: 'unknown',
+            uploadPendingCleared: 'unknown',
+          },
+          result: 'ambiguous_after_send', reason: errMsg, checkedAt: new Date().toISOString(),
+        }
+      : undefined;
+    return {
+      success: false, durationMs, messageId, error: errMsg, debugDump,
+      verificationMeta, postSendMaybeDelivered: sendClicked,
+    };
   } finally {
     await context.close();
   }
@@ -305,15 +363,15 @@ async function typeAndSend(page: Page, body: string): Promise<void> {
   await composer.click();
   await humanPause(page, [200, 500]);
 
-  // 2. Tipear preservando saltos de línea con Shift+Enter (un `\n` literal
-  //    enviaría el mensaje a medias en WA Channels).
-  await typeMultiline(page, composer, body, { delayMs: 50 });
+  // 2. Pegar/reemplazar el texto completo. Esto es más estable que teclear
+  //    copies largos con saltos de línea y evita escribir encima de un retry.
+  await replaceEditableText(page, composer, body, { delayMs: 50 });
 
-  // 3. Verificar que el texto llegó al composer. Normalizamos whitespace
-  //    porque Lexical puede serializar saltos como `\n`, ` `, etc.
+  // 3. Verificar que el texto llegó al composer con comparación tolerante:
+  //    WA/Lexical puede convertir saltos, listas `*` en bullets `•` y espacios.
   const typed = (await composer.textContent()) ?? '';
-  const normalize = (s: string) => s.replace(/\s+/g, ' ').trim();
-  if (normalize(typed) !== normalize(body)) {
+  if (!composerTextEquivalent(typed, body)) {
+    await clearEditable(page, composer).catch(() => undefined);
     throw new Error(
       `composer text mismatch after typing: expected="${body}" got="${typed}"`,
     );
@@ -341,38 +399,13 @@ async function typeAndSend(page: Page, body: string): Promise<void> {
   await page.keyboard.press('Enter');
   logger.debug('sent via Enter key fallback');
 }
-
-// ---------------------------------------------------------------------------
-// Verificación
-// ---------------------------------------------------------------------------
-
-async function verifyLastTextMessage(page: Page, expectedBody: string): Promise<boolean> {
-  try {
-    // Esperar a que aparezca un nuevo bubble en el hilo.
-    await waitForAny(page, SELECTORS.lastMessageBubble, { timeout: 15_000 });
-
-    // Dar margen a que el texto renderice
-    await page.waitForTimeout(500);
-
-    // Buscar el texto del último mensaje. Probamos varios selectores de texto.
-    for (const textSel of SELECTORS.messageText) {
-      const nodes = page.locator(`${SELECTORS.lastMessageBubble.join(', ')}`).last().locator(textSel);
-      try {
-        const content = await nodes.first().innerText({ timeout: 2_000 });
-        if (content.trim() === expectedBody.trim()) {
-          logger.info({ matchedBy: textSel }, 'post-send verification OK');
-          return true;
-        }
-        logger.debug({ got: content, expected: expectedBody }, 'text mismatch, trying next selector');
-      } catch {
-        /* probar siguiente */
-      }
-    }
-
-    logger.warn('post-send verification: text not matched');
-    return false;
-  } catch (err) {
-    logger.warn({ err }, 'post-send verification: no last message bubble found');
-    return false;
-  }
+function composerTextEquivalent(actual: string, expected: string): boolean {
+  const compact = (s: string) => normalizeText(s)
+    .replace(/•/g, '*')
+    .replace(/\s+/g, '')
+    .trim();
+  return compact(actual) === compact(expected);
 }
+
+// La verificación post-envío ahora vive en ./verify.ts (findLastThreadTexts +
+// textMatchesAny), compartida con publishMedia.

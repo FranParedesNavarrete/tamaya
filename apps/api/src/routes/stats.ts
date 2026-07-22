@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { and, eq, gte, lte, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gte, lte, isNull, sql, type SQL } from 'drizzle-orm';
 import { getDb, schema } from '@tamaya/db';
 
 const TENANT = 'default';
@@ -21,7 +21,8 @@ export async function statsRoutes(app: FastifyInstance) {
   });
 
   function baseConditions(q: z.infer<typeof rangeSchema>): SQL[] {
-    const conds: SQL[] = [eq(schema.jobs.tenantId, TENANT)];
+    // isNull(deletedAt) → todas las métricas excluyen jobs soft-deleted.
+    const conds: SQL[] = [eq(schema.jobs.tenantId, TENANT), isNull(schema.jobs.deletedAt)];
     if (q.from) conds.push(gte(schema.jobs.scheduledAt, new Date(q.from)));
     if (q.to) conds.push(lte(schema.jobs.scheduledAt, new Date(q.to)));
     if (q.channelId) conds.push(eq(schema.jobs.channelId, q.channelId));
@@ -272,6 +273,7 @@ export async function statsRoutes(app: FastifyInstance) {
       .from(schema.jobs)
       .where(and(
         eq(schema.jobs.tenantId, TENANT),
+        isNull(schema.jobs.deletedAt),
         eq(schema.jobs.status, 'failed'),
       ))
       .orderBy(sql`${schema.jobs.updatedAt} desc`)

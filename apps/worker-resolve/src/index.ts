@@ -1,7 +1,7 @@
 import { Worker } from 'bullmq';
 import { Redis } from 'ioredis';
 import pino from 'pino';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { getDb, schema } from '@tamaya/db';
 import { MediaResolver } from '@tamaya/media-resolver';
 import type { JobMedia } from '@tamaya/db';
@@ -21,23 +21,28 @@ const worker = new Worker(
     const { jobId } = job.data as { jobId: string };
     logger.info({ jobId, attempt: job.attemptsMade + 1 }, 'resolve start');
 
-    // Actualizar estado
-    await db.update(schema.jobs)
-      .set({ status: 'resolving', attemptCount: job.attemptsMade + 1 })
-      .where(eq(schema.jobs.id, jobId));
-
-    // Leer media[] del job
+    // Leer job antes de tocar estado: si fue cancelado o soft-deleted mientras
+    // estaba delayed en BullMQ, no debemos reactivarlo accidentalmente.
     const rows = await db.select().from(schema.jobs)
       .where(eq(schema.jobs.id, jobId)).limit(1);
     if (rows.length === 0) throw new Error(`job ${jobId} not found`);
     const row = rows[0];
     const mediaList = (row.media ?? []) as JobMedia[];
 
-    // Si el job fue cancelado mientras tanto, abortar
+    if (row.deletedAt) {
+      logger.warn({ jobId }, 'job soft-deleted, skipping');
+      return { skipped: true };
+    }
+
     if (row.status === 'cancelled') {
       logger.warn({ jobId }, 'job cancelled, skipping');
       return { skipped: true };
     }
+
+    // Actualizar estado solo tras confirmar que sigue activo.
+    await db.update(schema.jobs)
+      .set({ status: 'resolving', attemptCount: job.attemptsMade + 1 })
+      .where(and(eq(schema.jobs.id, jobId), isNull(schema.jobs.deletedAt)));
 
     // Resolver cada media (si no hay, es text-only y saltamos directo a publish)
     const resolved: JobMedia[] = [];
@@ -62,10 +67,11 @@ const worker = new Worker(
       .set({ media: resolved, status: 'ready' })
       .where(eq(schema.jobs.id, jobId));
 
-    // Encolar en publish-queue
+    // Encolar en publish-queue con delay hasta scheduledAt. La media ya queda
+    // resuelta desde ahora, pero publish no dispara hasta la hora programada.
     const { enqueuePublish } = await import('./enqueue-publish.js');
-    await enqueuePublish({ jobId });
-    logger.info({ jobId }, 'resolve done, enqueued to publish-queue');
+    await enqueuePublish({ jobId, scheduledAt: row.scheduledAt.toISOString() });
+    logger.info({ jobId, scheduledAt: row.scheduledAt.toISOString() }, 'resolve done, enqueued to publish-queue');
 
     return { ok: true };
   },
@@ -78,7 +84,7 @@ worker.on('failed', async (job, err) => {
   if (job.attemptsMade >= (job.opts.attempts ?? 3)) {
     await db.update(schema.jobs)
       .set({ status: 'failed', lastError: `resolve: ${err.message}` })
-      .where(eq(schema.jobs.id, job.id!));
+      .where(and(eq(schema.jobs.id, job.id!), isNull(schema.jobs.deletedAt)));
   }
 });
 
