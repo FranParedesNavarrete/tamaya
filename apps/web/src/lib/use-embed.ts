@@ -7,15 +7,20 @@
  * durante la sesión.
  *
  * NOTA: el modo embed NO cambia la seguridad. Las llamadas a la API siguen
- * necesitando el API token (localStorage `tamaya_api_token`). No hay aún
- * tokens temporales ni scopes.
+ * necesitando el API token (localStorage `tamaya_api_token`). Para iframes
+ * internos se puede bootstrappear con `?token=...`; evita usarlo en páginas
+ * públicas porque el token queda en historial/logs del navegador.
  */
+import { setStoredToken } from '../api/client';
+
 const EMBED_STORAGE_KEY = 'tamaya_embed';
 
 export function isEmbed(): boolean {
   try {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('embed') === '1') {
+    const token = params.get('token');
+    if (token) setStoredToken(token);
+    if (params.get('embed') === '1' || window.location.pathname.startsWith('/embed')) {
       sessionStorage.setItem(EMBED_STORAGE_KEY, '1');
       return true;
     }

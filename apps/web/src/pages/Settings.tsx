@@ -203,12 +203,8 @@ export function Settings() {
       {/* ---------- Selectores editables (Iteración 2) ---------- */}
       <SelectorsSection />
 
-      {/* ---------- Placeholder (iteración futura) ---------- */}
-      <PlaceholderCard
-        icon={<LayoutTemplate className="h-4 w-4" />}
-        title="Embeds"
-        text="Próximamente: configuración avanzada de vistas embebibles (el modo ?embed=1 ya está disponible)."
-      />
+      {/* ---------- Embeds ---------- */}
+      <EmbedsSection token={localToken} />
 
       <ConfirmDialog
         open={confirmRotate}
@@ -228,18 +224,52 @@ export function Settings() {
   );
 }
 
-function PlaceholderCard({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) {
+function EmbedsSection({ token }: { token: string | null }) {
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+  const snippets = [
+    { name: 'Overview completo', path: `/embed/overview?range=30d${tokenParam}`, h: 720 },
+    { name: 'KPIs', path: `/embed/kpis?range=30d${tokenParam}`, h: 180 },
+    { name: 'Actividad temporal', path: `/embed/timeline?range=30d&granularity=day${tokenParam}`, h: 380 },
+    { name: 'Estados', path: `/embed/status?range=30d${tokenParam}`, h: 360 },
+    { name: 'Colas / pipeline', path: `/embed/queues${tokenParam}`, h: 260 },
+    { name: 'Fallos recientes', path: `/embed/failures${tokenParam}`, h: 360 },
+  ];
   return (
-    <Card className="opacity-70">
+    <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base text-foreground">
-          {icon} {title}
-          <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
-            próximamente
-          </span>
+          <LayoutTemplate className="h-4 w-4" /> Embeds
         </CardTitle>
-        <CardDescription>{text}</CardDescription>
+        <CardDescription>
+          Iframes plug-and-play para llevar KPIs, gráficas y diagnóstico a n8n, Laravel, Notion interno o paneles externos.
+        </CardDescription>
       </CardHeader>
+      <CardContent className="space-y-3">
+        {!token && (
+          <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+            Guarda el API token en este navegador para generar snippets con bootstrap automático. Sin token, el iframe necesita que Tamaya ya tenga token en localStorage.
+          </div>
+        )}
+        <div className="space-y-2">
+          {snippets.map((s) => {
+            const url = `${origin}${s.path}`;
+            const iframe = `<iframe src="${url}" width="100%" height="${s.h}" style="border:0;border-radius:12px;overflow:hidden" loading="lazy"></iframe>`;
+            return (
+              <div key={s.name} className="rounded-md border p-2">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <div className="text-sm font-medium">{s.name}</div>
+                  <a className="text-xs text-primary underline" href={url} target="_blank" rel="noreferrer">Abrir</a>
+                </div>
+                <code className="block overflow-x-auto rounded bg-muted px-2 py-1.5 text-[11px]">{iframe}</code>
+              </div>
+            );
+          })}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Seguridad: evita usar URLs con <code>token=</code> en páginas públicas. Para producción real conviene crear después tokens embebibles con scopes/expiración.
+        </p>
+      </CardContent>
     </Card>
   );
 }

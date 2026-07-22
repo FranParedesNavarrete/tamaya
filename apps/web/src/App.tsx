@@ -7,6 +7,7 @@ import { NewJob } from './pages/NewJob';
 import { ChannelsList } from './pages/ChannelsList';
 import { ChannelForm } from './pages/ChannelForm';
 import { Settings } from './pages/Settings';
+import { EmbedWidget } from './pages/EmbedWidget';
 import { ThemeToggle } from './components/theme-toggle';
 import { isEmbed } from './lib/use-embed';
 
@@ -77,6 +78,8 @@ export default function App() {
           <Route path="/channels/new" element={<ChannelForm />} />
           <Route path="/channels/:id/edit" element={<ChannelForm />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/embed" element={<EmbedWidget />} />
+          <Route path="/embed/:widget" element={<EmbedWidget />} />
         </Routes>
         {!embed && <ThemeToggle />}
       </div>
