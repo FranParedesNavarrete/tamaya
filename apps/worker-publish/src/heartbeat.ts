@@ -1,6 +1,6 @@
 import { hostname } from 'node:os';
 import type { Logger } from 'pino';
-import { getDb, schema } from '@tamaya/db';
+import { getPool } from '@tamaya/db';
 
 /**
  * Heartbeat persistido en `app_settings`. Cada proceso nativo escribe
@@ -15,7 +15,6 @@ import { getDb, schema } from '@tamaya/db';
  *   - El timer usa unref() para no impedir que el proceso termine.
  */
 export function startHeartbeat(key: string, logger: Logger, intervalMs = 12_000): () => void {
-  const db = getDb();
   const write = async (): Promise<void> => {
     try {
       const value = JSON.stringify({
@@ -23,10 +22,13 @@ export function startHeartbeat(key: string, logger: Logger, intervalMs = 12_000)
         hostname: hostname(),
         updatedAt: new Date().toISOString(),
       });
-      await db
-        .insert(schema.appSettings)
-        .values({ key, value })
-        .onDuplicateKeyUpdate({ set: { value } });
+      // Ver apps/api/src/settings/store.ts: en algunos RDS/MySQL antiguos los
+      // prepared statements generados por Drizzle fallan de forma opaca. Para
+      // este KV/heartbeat usamos mysql2.query() directo.
+      await getPool().query(
+        'INSERT INTO `app_settings` (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)',
+        [key, value],
+      );
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : String(err), key }, 'heartbeat write failed');
     }

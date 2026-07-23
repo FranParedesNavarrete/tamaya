@@ -226,6 +226,7 @@ export async function navigateToChannel(
 
   // Estrategia B: pestaña Canales + buscar por nombre
   logger.info({ name: ch.name }, 'navigating via Channels tab + name');
+  await dismissBlockingDialogs(page);
   await openChannelsTab(page);
   await selectChannelByName(page, ch.name);
   await confirmChannelOpen(page, ch.name);
@@ -249,7 +250,15 @@ async function openChannelsTab(page: Page): Promise<void> {
   try {
     const tab = await waitForAny(page, SELECTORS.channelsTab, { timeout: 15_000 });
     await humanPause(page);
-    await tab.click();
+    try {
+      await tab.click({ timeout: 8_000 });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/intercepts pointer events|Timeout/i.test(msg)) throw err;
+      logger.warn({ err: msg }, 'Channels tab click blocked — trying to dismiss dialog');
+      await dismissBlockingDialogs(page);
+      await tab.click({ timeout: 8_000 });
+    }
     // Pequeña espera para que el panel lateral cambie.
     await page.waitForTimeout(800);
   } catch (err) {
@@ -258,6 +267,37 @@ async function openChannelsTab(page: Page): Promise<void> {
         err instanceof Error ? err.message : String(err)
       }`,
     );
+  }
+}
+
+/**
+ * WA Web puede mostrar diálogos globales al iniciar sesión / entrar a Channels
+ * (novedades, onboarding, permisos, "descarga la app", etc.). Si están abiertos
+ * interceptan el click sobre la pestaña Channels aunque el selector sea correcto.
+ * Cierre best-effort y conservador: primero botones Close/Cerrar visibles dentro
+ * de role=dialog; si no, Escape. No falla si no hay nada.
+ */
+async function dismissBlockingDialogs(page: Page): Promise<void> {
+  for (let i = 0; i < 3; i++) {
+    const dialog = page.locator('div[role="dialog"][aria-modal="true"], div[role="dialog"]').filter({ hasNotText: /^$/ }).first();
+    const visible = await dialog.isVisible({ timeout: 700 }).catch(() => false);
+    if (!visible) return;
+
+    const close = dialog.locator([
+      'button[aria-label="Cerrar"]',
+      'button[aria-label="Close"]',
+      'div[role="button"][aria-label="Cerrar"]',
+      'div[role="button"][aria-label="Close"]',
+      'span[data-icon="x"]',
+      'span[data-icon="x-alt"]',
+    ].join(',')).first();
+
+    if (await close.isVisible({ timeout: 500 }).catch(() => false)) {
+      await close.click({ timeout: 2_000 }).catch(() => undefined);
+    } else {
+      await page.keyboard.press('Escape').catch(() => undefined);
+    }
+    await page.waitForTimeout(500);
   }
 }
 
