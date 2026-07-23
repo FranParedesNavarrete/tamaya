@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import { getDb, schema } from '@tamaya/db';
+import { getDb, getPool, schema } from '@tamaya/db';
 import type { SelectorOverrides } from '@tamaya/shared-types';
 
 /**
@@ -18,30 +18,25 @@ const TOKEN_PREFIX = 'tamaya_';
 
 /** Lee un valor de settings; null si no existe. */
 export async function getSetting(key: string): Promise<string | null> {
-  const db = getDb();
-  // `key` es PRIMARY KEY, así que como máximo habrá una fila. Evitamos
-  // `.limit(1)` porque algunos MySQL/RDS antiguos fallan con parámetros
-  // preparados en LIMIT (`limit ?`).
-  const rows = await db
-    .select({ value: schema.appSettings.value })
-    .from(schema.appSettings)
-    .where(eq(schema.appSettings.key, key));
-  return rows.length > 0 ? (rows[0].value ?? null) : null;
+  // Usamos el protocolo text de mysql2 (`query`) para este almacén KV porque
+  // algunos RDS/MySQL antiguos dan errores opacos con prepared statements de
+  // Drizzle (`Failed query ... params ...`) incluso en SELECTs simples.
+  const [rows] = await getPool().query('SELECT `value` FROM `app_settings` WHERE `key` = ?', [key]);
+  const first = Array.isArray(rows) ? rows[0] as { value?: string | null } | undefined : undefined;
+  return first?.value ?? null;
 }
 
 /** Upsert de un valor de settings. */
 export async function setSetting(key: string, value: string): Promise<void> {
-  const db = getDb();
-  await db
-    .insert(schema.appSettings)
-    .values({ key, value })
-    .onDuplicateKeyUpdate({ set: { value } });
+  await getPool().query(
+    'INSERT INTO `app_settings` (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)',
+    [key, value],
+  );
 }
 
 /** Borra una clave de settings (si existe). */
 export async function deleteSetting(key: string): Promise<void> {
-  const db = getDb();
-  await db.delete(schema.appSettings).where(eq(schema.appSettings.key, key));
+  await getPool().query('DELETE FROM `app_settings` WHERE `key` = ?', [key]);
 }
 
 /**
