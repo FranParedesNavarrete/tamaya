@@ -112,6 +112,10 @@ services:
       AWS_REGION: ${AWS_REGION}
       TAMAYA_TMP_DIR: ${TAMAYA_TMP_DIR}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+    # En Linux permite que worker-resolve alcance Redis/servicios del host si
+    # REDIS_URL_DOCKER usa host.docker.internal. En Docker Desktop es inocuo.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ${TAMAYA_TMP_DIR}:${TAMAYA_TMP_DIR}
       # Montajes útiles solo en desarrollo:

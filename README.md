@@ -152,11 +152,12 @@ docker compose version
 **Opción A — AWS RDS MySQL 8** (recomendado):
 
 1. Crea una instancia MySQL 8.0 en RDS (db.t3.micro vale para PoC).
-2. Abre el security group al puerto 3306 desde tu IP.
-3. Conecta y crea el schema:
+2. Abre el security group al puerto 3306 desde la IP pública del servidor que ejecuta Tamaya.
+3. Conecta y crea la base de datos antes de ejecutar `npm run db:push`:
    ```sql
    CREATE DATABASE tamaya CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
    ```
+4. En producción con RDS, `DATABASE_URL` y `DATABASE_URL_DOCKER` deben apuntar a la misma URL de RDS. No uses `mysql:3306` salvo que levantes MySQL dentro del compose.
 
 **Opción B — MySQL local**:
 
@@ -215,6 +216,60 @@ DATABASE_URL=mysql://user:password@host:3306/tamaya
 AWS_ACCESS_KEY_ID=
 AWS_SECRET_ACCESS_KEY=
 AWS_REGION=eu-west-1
+```
+
+### Producción con AWS RDS: checklist anti-incidencias
+
+Si usas RDS externo y no el MySQL opcional de Docker:
+
+```env
+COMPOSE_PROFILES=
+DATABASE_URL=mysql://admin:PASSWORD_URL_ENCODED@tu-rds.xxxxx.eu-south-2.rds.amazonaws.com:3306/tamaya
+DATABASE_URL_DOCKER=mysql://admin:PASSWORD_URL_ENCODED@tu-rds.xxxxx.eu-south-2.rds.amazonaws.com:3306/tamaya
+DATABASE_SSL=require
+```
+
+Puntos críticos:
+
+- La base `tamaya` debe existir antes de `npm run db:push`.
+- `DATABASE_URL` la usan procesos nativos del host (`db:push`, `worker-publish`).
+- `DATABASE_URL_DOCKER` la usan `api` y `worker-resolve` dentro de Docker.
+- En RDS, ambas URLs normalmente son idénticas.
+- No dejes `DATABASE_URL_DOCKER=mysql://tamaya:tamaya@mysql:3306/tamaya` si `COMPOSE_PROFILES=`; ese host `mysql` solo existe con infra local del compose.
+- Usa `DATABASE_SSL=require` con RDS.
+- Si la contraseña contiene caracteres especiales (`%`, `#`, `$`, `&`, `@`, `:`, `/`, `?`, `*`), debe ir percent-encoded en la URL.
+  - `%` → `%25`
+  - `#` → `%23`
+  - `$` → `%24`
+  - `&` → `%26`
+  - `@` → `%40`
+  - `:` → `%3A`
+  - `/` → `%2F`
+
+Errores típicos:
+
+| Error | Causa habitual | Solución |
+| --- | --- | --- |
+| `Unknown database 'tamaya'` | La base no existe en RDS | Crear `CREATE DATABASE tamaya ...` y repetir `npm run db:push` |
+| `Access denied for user ...` | Password mal codificada o `DATABASE_URL_DOCKER` distinta a `DATABASE_URL` | Igualar ambas URLs y revisar percent-encoding |
+| `Failed query ... app_settings ... params: security.apiTokenHash` | Schema no aplicado o conexión RDS incompatible/mal configurada | Ejecutar `npm run db:push`, usar `DATABASE_SSL=require`, reconstruir API |
+| CORS `Origin ... is not allowed` | `API_CORS_ORIGIN` no coincide exactamente con la URL de la UI | Incluir el origen exacto, por ejemplo `http://IP:5211` |
+| `getaddrinfo ENOTFOUND host.docker.internal` en `worker-resolve` | En Linux falta el alias Docker hacia el host o el contenedor no fue recreado tras añadirlo | `worker-resolve` debe tener `extra_hosts: host.docker.internal:host-gateway`; recrear con `docker compose up -d --force-recreate worker-resolve` |
+
+Después de cambiar `.env`, no basta siempre con reiniciar. Recréalo:
+
+```bash
+docker compose up -d --build api web worker-resolve
+pm2 restart tamaya-worker-publish tamaya-worker-control --update-env
+pm2 save
+```
+
+Comprueba el entorno real cargado:
+
+```bash
+docker compose exec api env | grep API_CORS_ORIGIN
+docker compose exec api node -e "const u=new URL(process.env.DATABASE_URL); console.log(u.username,u.hostname,u.port,u.pathname)"
+docker compose exec web env | grep VITE_API_BASE_URL
 ```
 
 `APP_URL` se usa para construir `API_CORS_ORIGIN` y el `VITE_API_BASE_URL` de build del frontend — un solo cambio cubre los tres sitios. El resto trae valores por defecto razonables. `TAMAYA_TMP_DIR=/tmp/tamaya-media` es **ruta absoluta compartida** entre el `worker-resolve` (Docker, bind-mount) y el `worker-publish` (nativo) — no la cambies salvo que sepas lo que haces.
