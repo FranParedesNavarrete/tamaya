@@ -19,11 +19,13 @@ const TOKEN_PREFIX = 'tamaya_';
 /** Lee un valor de settings; null si no existe. */
 export async function getSetting(key: string): Promise<string | null> {
   const db = getDb();
+  // `key` es PRIMARY KEY, así que como máximo habrá una fila. Evitamos
+  // `.limit(1)` porque algunos MySQL/RDS antiguos fallan con parámetros
+  // preparados en LIMIT (`limit ?`).
   const rows = await db
     .select({ value: schema.appSettings.value })
     .from(schema.appSettings)
-    .where(eq(schema.appSettings.key, key))
-    .limit(1);
+    .where(eq(schema.appSettings.key, key));
   return rows.length > 0 ? (rows[0].value ?? null) : null;
 }
 
