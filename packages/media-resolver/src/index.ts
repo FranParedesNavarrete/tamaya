@@ -13,6 +13,13 @@ export interface ResolvedMedia {
   originalSource: string;
 }
 
+export interface MediaResolveHint {
+  /** "png" | "jpg" | "mp4" o MIME completo "image/png" | "video/mp4". */
+  mimeType?: string;
+  /** Nombre original; se usa su extensión como fallback si es compatible. */
+  originalName?: string;
+}
+
 export interface ResolverOptions {
   /** Directorio donde se escriben las descargas. Ej: /data/tmp */
   tmpDir: string;
@@ -36,7 +43,7 @@ export class MediaResolver {
     return this.s3;
   }
 
-  async resolve(source: string): Promise<ResolvedMedia> {
+  async resolve(source: string, hint: MediaResolveHint = {}): Promise<ResolvedMedia> {
     if (source.startsWith('/') || source.startsWith('file://')) {
       return this.resolveLocal(source.replace(/^file:\/\//, ''));
     }
@@ -46,7 +53,7 @@ export class MediaResolver {
     }
 
     if (source.startsWith('http://') || source.startsWith('https://')) {
-      return this.resolveHttp(source);
+      return this.resolveHttp(source, hint);
     }
 
     throw new Error(`Unsupported media source scheme: ${source}`);
@@ -87,7 +94,7 @@ export class MediaResolver {
     };
   }
 
-  private async resolveHttp(url: string): Promise<ResolvedMedia> {
+  private async resolveHttp(url: string, hint: MediaResolveHint): Promise<ResolvedMedia> {
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), this.opts.downloadTimeoutMs ?? 120_000);
 
@@ -98,15 +105,20 @@ export class MediaResolver {
       }
 
       // Prioridad de extensión:
-      //  1. Derivar de Content-Type (autoritativo, lo envía el servidor)
-      //  2. Extraer del pathname de la URL
-      //  3. Último recurso: .bin (suele causar rechazo por WA Web)
+      //  1. Pista explícita de integración (`mimeType`: png/image/png/mp4/...)
+      //  2. Extensión del nombre original (`originalName`)
+      //  3. Derivar de Content-Type (lo envía el servidor)
+      //  4. Extraer del pathname de la URL
+      //  5. Último recurso: .bin (suele causar rechazo por WA Web)
       // Saber la extensión correcta es CRÍTICO: Playwright infiere el MIME del
       // archivo por extensión al subirlo, y WA Web rechaza tipos desconocidos.
       const contentType = resp.headers.get('content-type')?.split(';')[0].trim();
+      const hintMime = normalizeMimeHint(hint.mimeType);
+      const hintExt = hintMime ? extensionFromMime(hintMime) : undefined;
+      const nameExt = hint.originalName ? allowedExt(extname(hint.originalName)) : undefined;
       const ctExt = contentType ? extensionFromMime(contentType) : undefined;
-      const urlExt = extname(new URL(url).pathname);
-      const chosenExt = ctExt || urlExt || '.bin';
+      const urlExt = allowedExt(extname(new URL(url).pathname));
+      const chosenExt = hintExt || nameExt || ctExt || urlExt || '.bin';
 
       const target = this.targetPathFor(url, chosenExt);
       await mkdir(dirname(target), { recursive: true });
@@ -115,7 +127,7 @@ export class MediaResolver {
       this.assertSize(buf.byteLength, url);
       await writeFile(target, buf);
 
-      const mime = contentType ?? mimeFromExtension(target);
+      const mime = hintMime ?? contentType ?? mimeFromExtension(target);
       return {
         localPath: target,
         mime,
@@ -152,6 +164,18 @@ function mimeFromExtension(path: string): string | undefined {
   return EXT_TO_MIME[ext];
 }
 
+function allowedExt(ext: string): string | undefined {
+  const normalized = ext.toLowerCase();
+  return EXT_TO_MIME[normalized] ? normalized : undefined;
+}
+
+function normalizeMimeHint(hint: string | undefined): string | undefined {
+  if (!hint) return undefined;
+  const normalized = hint.trim().toLowerCase().replace(/^\./, '');
+  if (normalized.includes('/')) return MIME_TO_EXT[normalized] ? normalized : undefined;
+  return EXT_TO_MIME[`.${normalized}`];
+}
+
 /**
  * Dado un MIME, devuelve la extensión canónica (con punto). Se usa al descargar
  * desde URLs donde el pathname no tiene extensión útil (CDNs, proxies) —
@@ -168,19 +192,11 @@ const EXT_TO_MIME: Record<string, string> = {
   '.png': 'image/png',
   '.gif': 'image/gif',
   '.webp': 'image/webp',
-  '.bmp': 'image/bmp',
-  '.heic': 'image/heic',
+  // Mantenemos la allow-list intencionadamente corta para WhatsApp Channels:
+  // imágenes comunes y vídeos web. MP4 es el vídeo más fiable.
   '.mp4': 'video/mp4',
   '.mov': 'video/quicktime',
   '.webm': 'video/webm',
-  '.mkv': 'video/x-matroska',
-  '.m4v': 'video/x-m4v',
-  '.3gp': 'video/3gpp',
-  '.mp3': 'audio/mpeg',
-  '.ogg': 'audio/ogg',
-  '.wav': 'audio/wav',
-  '.m4a': 'audio/mp4',
-  '.pdf': 'application/pdf',
 };
 
 const MIME_TO_EXT: Record<string, string> = {
@@ -189,18 +205,7 @@ const MIME_TO_EXT: Record<string, string> = {
   'image/png': '.png',
   'image/gif': '.gif',
   'image/webp': '.webp',
-  'image/bmp': '.bmp',
-  'image/heic': '.heic',
-  'image/heif': '.heic',
   'video/mp4': '.mp4',
   'video/quicktime': '.mov',
   'video/webm': '.webm',
-  'video/x-matroska': '.mkv',
-  'video/x-m4v': '.m4v',
-  'video/3gpp': '.3gp',
-  'audio/mpeg': '.mp3',
-  'audio/ogg': '.ogg',
-  'audio/wav': '.wav',
-  'audio/mp4': '.m4a',
-  'application/pdf': '.pdf',
 };

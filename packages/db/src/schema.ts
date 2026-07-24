@@ -71,8 +71,10 @@ export const jobs = mysqlTable('jobs', {
 // Tipo del campo JSON `media`
 export type JobMedia = {
   source: string;          // "s3://bucket/key" | "https://..." | "file:///path" | "/abs/path"
+  mimeType?: string;       // pista opcional enviada por API: "png" | "image/png" | "mp4" | ...
+  originalName?: string;   // nombre original opcional; útil para derivar extensión en S3 presigned
   localPath?: string;      // rellenado por resolve-worker tras descarga
-  mime?: string;           // detectado por resolve-worker
+  mime?: string;           // detectado/normalizado por resolve-worker
   sizeBytes?: number;
 };
 

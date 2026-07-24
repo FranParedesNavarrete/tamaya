@@ -52,7 +52,10 @@ const worker = new Worker(
         resolved.push(m);
         continue;
       }
-      const r = await resolver.resolve(m.source);
+      const r = await resolver.resolve(m.source, {
+        mimeType: m.mimeType,
+        originalName: m.originalName,
+      });
       resolved.push({
         ...m,
         localPath: r.localPath,

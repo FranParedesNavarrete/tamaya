@@ -1,7 +1,23 @@
 import { z } from 'zod';
 
+export const MediaMimeHintSchema = z.enum([
+  // Imágenes soportadas por WhatsApp Channels en el flujo actual.
+  'jpg', 'jpeg', 'png', 'gif', 'webp',
+  'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp',
+  // Vídeos recomendados/soportados. MP4 es el más fiable.
+  'mp4', 'mov', 'webm',
+  'video/mp4', 'video/quicktime', 'video/webm',
+]);
+
 export const MediaSourceSchema = z.object({
   source: z.string().min(1),
+  /**
+   * Pista opcional para URLs sin extensión o Content-Type fiable, p.ej. S3
+   * presigned: "png", "jpg", "mp4" o MIME completo "image/png".
+   */
+  mimeType: MediaMimeHintSchema.optional(),
+  /** Nombre original opcional; Tamaya puede usar su extensión como fallback. */
+  originalName: z.string().optional(),
 });
 
 /**
@@ -19,8 +35,8 @@ export const CreateJobSchema = z.object({
   channelId: z.string().uuid(),
   text: z.string().optional(),
   media: z.array(MediaSourceSchema).default([]),
-  /** ISO 8601 con timezone, ej. 2026-07-22T11:20:00.000Z. También acepta "now". */
-  scheduledAt: z.union([z.string().datetime(), LocalDateTimeSchema, PublishNowSchema]).optional(),
+  /** ISO 8601 con timezone, ej. 2026-07-22T11:20:00.000Z o 2026-07-22T13:20:00+02:00. También acepta "now". */
+  scheduledAt: z.union([z.string().datetime({ offset: true }), LocalDateTimeSchema, PublishNowSchema]).optional(),
   /** Alias recomendado para integraciones: hora local Madrid, ej. 2026-05-13 14:57:50. También acepta "now". */
   datetime: z.union([LocalDateTimeSchema, PublishNowSchema]).optional(),
   /** Alternativa explícita para publicar inmediatamente. */
