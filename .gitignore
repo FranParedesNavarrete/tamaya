@@ -45,6 +45,9 @@ npm-debug.log*
 debug/
 **/debug/
 
+# Notas locales de producción — no versionar
+/docs/PRODUCTION-NOTES.local.md
+
 # TypeScript build cache
 *.tsbuildinfo
 

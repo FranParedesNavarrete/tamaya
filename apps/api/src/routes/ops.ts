@@ -115,6 +115,19 @@ export async function opsRoutes(app: FastifyInstance) {
     };
   });
 
+  // POST /ops/publisher/restart — pide al control server nativo reiniciar worker-publish vía PM2.
+  app.post('/publisher/restart', async (_req, reply) => {
+    try {
+      const { status, body } = await controlFetch('POST', '/publisher/restart', { timeoutMs: 35_000 });
+      return reply.code(status).send(body);
+    } catch (err) {
+      if (err instanceof ControlUnavailableError) {
+        return reply.code(503).send({ error: 'worker-publish control server not available' });
+      }
+      throw err;
+    }
+  });
+
   // GET /ops/health — salud de las dependencias.
   app.get('/health', async () => {
     let dbOk = false;

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, type OpsQueues, type OpsPublisher, type OpsHealth } from '../../api/client';
 import { Button } from '../ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../ui/card';
-import { Activity, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
+import { Activity, RefreshCw, CheckCircle2, XCircle, HelpCircle } from 'lucide-react';
 
 function Dot({ ok }: { ok: boolean }) {
   return ok
@@ -31,7 +31,9 @@ export function OpsSection() {
   const [publisher, setPublisher] = useState<OpsPublisher | null>(null);
   const [health, setHealth] = useState<OpsHealth | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [restartMessage, setRestartMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [restarting, setRestarting] = useState(false);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -52,6 +54,22 @@ export function OpsSection() {
   }, [refresh]);
 
   const hb = publisher?.publisherHeartbeat;
+
+  const restartPublisher = useCallback(async () => {
+    if (!window.confirm('¿Reiniciar worker-publish ahora?')) return;
+    setRestarting(true);
+    setError(null);
+    setRestartMessage(null);
+    try {
+      const r = await api.restartPublisher();
+      setRestartMessage(r.ok ? `Reinicio solicitado para ${r.process}.` : (r.error ?? 'No se pudo reiniciar worker-publish.'));
+      setTimeout(() => void refresh(), 2000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRestarting(false);
+    }
+  }, [refresh]);
 
   return (
     <Card id="diagnostico">
@@ -104,11 +122,29 @@ export function OpsSection() {
               </div>
             )}
 
+            {restartMessage && <div className="text-xs text-green-600">{restartMessage}</div>}
             {error && <div className="text-xs text-red-600 break-all">{error}</div>}
 
-            <Button size="sm" variant="outline" onClick={() => void refresh()}>
-              <RefreshCw className="h-4 w-4 mr-1" /> Refrescar
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => void refresh()}>
+                <RefreshCw className="h-4 w-4 mr-1" /> Refrescar
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void restartPublisher()}
+                disabled={restarting || health?.controlServer === false}
+              >
+                <RefreshCw className={`h-4 w-4 mr-1 ${restarting ? 'animate-spin' : ''}`} />
+                {restarting ? 'Reiniciando…' : 'Reiniciar worker-publish'}
+              </Button>
+              <span title="Sirve para refrescar worker-publish tras vincular WhatsApp o cambiar ajustes/selectores. Lanza un pm2 restart tamaya-worker-publish en el host.">
+                <HelpCircle
+                  className="h-4 w-4 text-muted-foreground"
+                  aria-label="Ayuda sobre reiniciar worker-publish"
+                />
+              </span>
+            </div>
           </>
         )}
       </CardContent>

@@ -22,6 +22,8 @@ import { fileURLToPath } from 'node:url';
 loadEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../../.env') });
 
 import { createServer, type ServerResponse } from 'node:http';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import pino from 'pino';
 import { eq } from 'drizzle-orm';
 import { getDb, schema } from '@tamaya/db';
@@ -45,6 +47,9 @@ const HOST = process.env.TAMAYA_CONTROL_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.TAMAYA_CONTROL_PORT ?? 3010);
 const CONTROL_TOKEN = process.env.TAMAYA_CONTROL_TOKEN?.trim() || '';
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+const PM2_BIN = process.env.TAMAYA_PM2_BIN ?? 'pm2';
+const PM2_PUBLISH_NAME = process.env.TAMAYA_PM2_PUBLISH_NAME ?? 'tamaya-worker-publish';
+const execFileAsync = promisify(execFile);
 
 // En Linux, para que un contenedor Docker alcance el servicio nativo vía
 // host.docker.internal/host-gateway, normalmente el proceso no puede escuchar
@@ -173,6 +178,21 @@ async function resetSession(): Promise<{ ok: true }> {
   return { ok: true };
 }
 
+async function restartPublisher(): Promise<{ ok: boolean; process: string; stdout?: string; stderr?: string; error?: string }> {
+  try {
+    const { stdout, stderr } = await execFileAsync(PM2_BIN, ['restart', PM2_PUBLISH_NAME, '--update-env'], {
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024,
+    });
+    logger.info({ process: PM2_PUBLISH_NAME }, 'worker-publish restart requested');
+    return { ok: true, process: PM2_PUBLISH_NAME, stdout, stderr };
+  } catch (err) {
+    const msg = errMsg(err);
+    logger.error({ err: msg, process: PM2_PUBLISH_NAME }, 'worker-publish restart failed');
+    return { ok: false, process: PM2_PUBLISH_NAME, error: msg };
+  }
+}
+
 function statusPayload() {
   return {
     sessionExists: sessionExists(),
@@ -236,6 +256,10 @@ const server = createServer((req, res) => {
       }
       if (method === 'POST' && path === '/whatsapp/session/reset') {
         return json(res, 200, await resetSession());
+      }
+      if (method === 'POST' && path === '/publisher/restart') {
+        const r = await restartPublisher();
+        return json(res, r.ok ? 200 : 500, r);
       }
       return json(res, 404, { error: 'not found' });
     } catch (err) {

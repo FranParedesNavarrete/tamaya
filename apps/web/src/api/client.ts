@@ -177,6 +177,13 @@ export interface OpsHealth {
   publisherOnline: boolean;
   ts: string;
 }
+export interface OpsRestartPublisher {
+  ok: boolean;
+  process: string;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+}
 
 export interface JobSearchParams extends StatsRange {
   status?: string;
@@ -216,6 +223,7 @@ export const api = {
   opsQueues: () => req<OpsQueues>('/ops/queues'),
   opsPublisher: () => req<OpsPublisher>('/ops/publisher'),
   opsHealth: () => req<OpsHealth>('/ops/health'),
+  restartPublisher: () => req<OpsRestartPublisher>('/ops/publisher/restart', { method: 'POST' }),
 
   // Channels
   listChannels: () => req<Channel[]>('/channels'),
