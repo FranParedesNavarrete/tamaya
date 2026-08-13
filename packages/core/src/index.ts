@@ -15,6 +15,8 @@ export {
   resetSelectorsToDefaults,
 } from './browser/selectors.js';
 export { config } from './config.js';
-export { waitForAny } from './browser/dom-helpers.js';
+export { waitForAny, diagnoseSelectors } from './browser/dom-helpers.js';
+export { waitForAppReady, describeAppState } from './browser/app-state.js';
+export type { AppState, AppStateReport } from './browser/app-state.js';
 export type { PublishTextInput, PublishResult } from './publisher/publish-text.js';
 export type { PublishMediaInput } from './publisher/publish-media.js';

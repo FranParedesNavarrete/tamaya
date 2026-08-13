@@ -34,31 +34,61 @@ export async function waitForAny(
   const tStart = Date.now();
   const locators = selectors.map((s) => page.locator(s).first());
 
-  // Polling en paralelo — el primero que resuelva gana.
-  const result = await Promise.race(
-    locators.map(async (loc, idx) => {
-      try {
+  // Promise.any: gana el PRIMERO que cumple, y solo falla si fallan TODOS.
+  //
+  // Antes esto era un Promise.race sobre promesas que resolvían a `null` en
+  // caso de fallo, así que el primer selector en fallar (p. ej. uno inválido
+  // para el motor de Playwright, que rechaza al instante) ganaba la carrera y
+  // abortaba la espera entera. El mensaje seguía diciendo "in 60000ms" porque
+  // imprimía el timeout configurado, no el tiempo real ⇒ diagnóstico engañoso.
+  try {
+    const winner = await Promise.any(
+      locators.map(async (loc, idx) => {
         await loc.waitFor({ state, timeout });
         return { idx, loc };
-      } catch {
-        return null;
-      }
-    }),
-  );
-
-  if (result) {
-    const elapsed = Date.now() - tStart;
+      }),
+    );
     logger.debug(
-      { selector: selectors[result.idx], elapsed, idx: result.idx },
+      { selector: selectors[winner.idx], elapsedMs: Date.now() - tStart, idx: winner.idx },
       'waitForAny matched',
     );
-    return result.loc;
+    return winner.loc;
+  } catch {
+    const elapsedMs = Date.now() - tStart;
+    const diagnosis = await diagnoseSelectors(page, selectors);
+    throw new Error(
+      `waitForAny: no selector matched (state=${state}) tras ${elapsedMs}ms ` +
+        `(timeout ${timeout}ms). Estado de cada selector: ${diagnosis}`,
+    );
   }
+}
 
-  // Ninguno visible — esperar hasta timeout total con el primero
-  throw new Error(
-    `waitForAny: no selector matched in ${timeout}ms. Tried: ${selectors.join(' | ')}`,
-  );
+/**
+ * Para cada selector dice si el elemento no existe, existe pero está oculto, o
+ * si el selector es inválido. Distinguir "ausente" de "presente pero oculto" es
+ * lo que decide si hay que cambiar el selector o si el problema es de estado de
+ * la página (overlay encima, panel colapsado, sesión no cargada…).
+ */
+export async function diagnoseSelectors(
+  page: Page,
+  selectors: readonly string[],
+): Promise<string> {
+  const parts: string[] = [];
+  for (const sel of selectors) {
+    try {
+      const count = await page.locator(sel).count();
+      if (count === 0) {
+        parts.push(`${sel} → ausente`);
+        continue;
+      }
+      const visible = await page.locator(sel).first().isVisible().catch(() => false);
+      parts.push(`${sel} → ${visible ? 'visible' : 'presente pero OCULTO'} (n=${count})`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message.split('\n')[0] : String(err);
+      parts.push(`${sel} → SELECTOR INVÁLIDO (${msg})`);
+    }
+  }
+  return parts.join(' ; ');
 }
 
 /**

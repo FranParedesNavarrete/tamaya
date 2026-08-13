@@ -19,6 +19,7 @@ import {
   sessionExists,
 } from '../browser/session.js';
 import { SELECTORS } from '../browser/selectors.js';
+import { waitForAppReady } from '../browser/app-state.js';
 import {
   dumpDebugInfo,
   humanPause,
@@ -93,7 +94,7 @@ export async function publishText(input: PublishTextInput): Promise<PublishResul
     await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded' });
 
     logger.info('waiting for app to be ready');
-    await waitForAny(page, SELECTORS.appReady, { timeout: 60_000 });
+    await waitForAppReady(page, { timeout: 60_000 });
 
     await navigateToChannel(page, input.channelIdentifier);
 

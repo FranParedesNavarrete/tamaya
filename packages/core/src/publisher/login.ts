@@ -8,8 +8,7 @@
  * Tras este paso, publish-text y publish-media reutilizan la sesión sin QR.
  */
 import { launchPersistentContextForTenant } from '../browser/session.js';
-import { SELECTORS } from '../browser/selectors.js';
-import { waitForAny } from '../browser/dom-helpers.js';
+import { waitForAppReady } from '../browser/app-state.js';
 import { audit } from '../db/client.js';
 import { logger } from '../logger.js';
 
@@ -24,7 +23,7 @@ export async function runLogin(): Promise<void> {
     logger.info('waiting for login — scan the QR code with your phone');
     // Esperamos a que aparezca cualquiera de los marcadores de app cargada.
     // Timeout generoso (5 min) para que dé tiempo a escanear el QR.
-    await waitForAny(page, SELECTORS.appReady, { timeout: 5 * 60 * 1000 });
+    await waitForAppReady(page, { timeout: 5 * 60 * 1000 });
 
     logger.info('login detected — session persisted in userDataDir');
     audit('system', 'login_success');

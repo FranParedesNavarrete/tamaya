@@ -18,6 +18,7 @@ import {
   sessionExists,
 } from '../browser/session.js';
 import { SELECTORS } from '../browser/selectors.js';
+import { waitForAppReady } from '../browser/app-state.js';
 import {
   dumpDebugInfo,
   humanPause,
@@ -167,7 +168,7 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
   try {
     const page = context.pages()[0] ?? (await context.newPage());
     await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded' });
-    await waitForAny(page, SELECTORS.appReady, { timeout: 60_000 });
+    await waitForAppReady(page, { timeout: 60_000 });
 
     await navigateToChannel(page, input.channelIdentifier);
 
