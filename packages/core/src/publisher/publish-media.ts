@@ -489,15 +489,17 @@ async function assertNotStickerPreview(page: Page): Promise<void> {
 async function sendFromPreview(page: Page): Promise<void> {
   await humanPause(page, [600, 1200]);
 
-  // Scope a la caja del preview: el ancestro más cercano del input "Type an
-  // update" que también contiene un botón Send. Esto evita que clickemos en
-  // un wds-ic-send-filled que esté en otro lado (p. ej. en otro composer
-  // que WA pinte detrás).
+  // Scope a la caja del preview: partimos de la caja de caption (selectores ya
+  // filtrados para NO matchear el composer del canal) y subimos al ancestro MÁS
+  // CERCANO que contenga un botón Send. Así evitamos clicar un send que esté en
+  // otro lado (p. ej. el composer que WA pinta detrás del overlay).
   //
-  // aria-label en WA Channels suele llevar sufijo dinámico: "Send 1 selected".
-  // Usamos starts-with() en XPath y prefix-match en CSS.
-  const previewScope = page.locator(
-    'xpath=//*[.//div[@contenteditable="true" and @aria-label="Type an update"] and .//*[(@role="button" or self::button) and (starts-with(@aria-label, "Send") or starts-with(@aria-label, "Enviar"))]][1]',
+  // El eje `ancestor::` va en orden inverso ⇒ `[1]` es el ancestro más próximo.
+  // aria-label en WA Channels suele llevar sufijo dinámico: "Send 1 selected",
+  // por eso starts-with() en XPath y prefix-match en CSS.
+  const captionBox = page.locator(SELECTORS.captionInputOnPreview.join(', ')).first();
+  const previewScope = captionBox.locator(
+    'xpath=ancestor::*[.//*[(@role="button" or self::button) and (starts-with(@aria-label, "Send") or starts-with(@aria-label, "Enviar"))]][1]',
   ).first();
   const hasScope = (await previewScope.count().catch(() => 0)) > 0;
   const scope = hasScope ? previewScope : null;
@@ -559,6 +561,29 @@ async function sendFromPreview(page: Page): Promise<void> {
 }
 
 /**
+ * Scope del hilo del canal abierto. Buscar/contar señales page-wide da falsos
+ * positivos: la lista de chats de la izquierda también usa `div[role="row"]` y
+ * llega a pintar `data-icon="message-fail"` en conversaciones antiguas.
+ */
+const THREAD_SCOPE = [
+  'div[data-testid="conversation-panel-messages"]',
+  'div[data-testid="conversation-panel-body"]',
+  '#main',
+];
+
+/**
+ * Prefija cada selector con el scope del hilo (el primero que exista en el DOM).
+ * Si ninguno existe, devuelve los selectores tal cual (degradación a page-wide).
+ */
+async function scopedSelectors(page: Page, inner: string[]): Promise<string[]> {
+  for (const scope of THREAD_SCOPE) {
+    const exists = (await page.locator(scope).count().catch(() => 0)) > 0;
+    if (exists) return inner.map((s) => `${scope} ${s}`);
+  }
+  return [...inner];
+}
+
+/**
  * Espera a que el upload del media termine antes de cerrar el navegador.
  *
  * WA Web hace el upload tras clicar Send; si cerramos el contexto demasiado
@@ -576,24 +601,48 @@ async function sendFromPreview(page: Page): Promise<void> {
  * proceso si falla.
  */
 async function countThreadMarkers(page: Page): Promise<number> {
-  // WA Channels no siempre renderiza los ticks msg-time/msg-check que usamos
-  // en chats normales. Como señal adicional contamos filas/burbujas del hilo
-  // antes/después de clicar Send: si aumenta, el mensaje sí se insertó.
-  const selectors = [
+  // WA Channels no siempre renderiza los ticks que usamos en chats normales.
+  // Como señal adicional contamos burbujas DEL HILO antes/después de clicar
+  // Send: si aumenta, el mensaje sí se insertó.
+  const scoped = await scopedSelectors(page, [
+    'div[data-testid^="conv-msg-"]',
     'div[role="row"]',
-    'div.message-out',
     'div[data-pre-plain-text]',
-  ];
+    'div.message-out',
+  ]);
   const counts = await Promise.all(
-    selectors.map((sel) => page.locator(sel).count().catch(() => 0)),
+    scoped.map((sel) => page.locator(sel).count().catch(() => 0)),
   );
-  return Math.max(...counts);
+  return Math.max(0, ...counts);
 }
 
-const INDICATOR_SELECTOR =
-  'span[data-icon="msg-time"], span[data-icon="msg-check"], span[data-icon="msg-dblcheck"]';
-const FAILED_SELECTOR =
-  'span[data-icon="msg-failed"], [aria-label*="Reintentar" i], [aria-label*="Retry" i]';
+/**
+ * Indicadores de estado del mensaje. WA migró de `data-icon="msg-*"` a
+ * `<svg><title>wds-ic-delivered|wds-ic-read</title>` (verificado 2026-08-13),
+ * así que hay que aceptar ambas familias.
+ */
+const INDICATOR_INNER = [
+  'span:has(> svg > title:text-is("wds-ic-delivered"))',
+  'span:has(> svg > title:text-is("wds-ic-read"))',
+  'span[aria-label*="Sent" i]:has(> svg > title)',
+  'span[data-icon="msg-time"]',
+  'span[data-icon="msg-check"]',
+  'span[data-icon="msg-dblcheck"]',
+];
+/** Pendiente de subida (reloj). Nombre nuevo aún no observado ⇒ lista amplia. */
+const PENDING_INNER = [
+  'span[data-icon="msg-time"]',
+  'span:has(> svg > title:text-is("wds-ic-pending"))',
+  'span:has(> svg > title:text-is("wds-ic-clock"))',
+  'span[aria-label*="Pending" i]:has(> svg > title)',
+];
+const FAILED_INNER = [
+  'span[data-icon="msg-failed"]',
+  'span[data-icon="message-fail"]',
+  'span:has(> svg > title:text-is("message-fail"))',
+  '[aria-label*="Reintentar" i]',
+  '[aria-label*="Retry" i]',
+];
 
 /**
  * Verifica el resultado tras pulsar Send, SIN depender solo de los ticks
@@ -633,9 +682,12 @@ async function verifyAfterSend(
   }
 
   // 2) Evidencia de inserción: indicador (tick) o nuevo item en el hilo.
+  const indicatorSelector = (await scopedSelectors(page, INDICATOR_INNER)).join(', ');
+  const pendingSelector = (await scopedSelectors(page, PENDING_INNER)).join(', ');
+  const failedSelector = (await scopedSelectors(page, FAILED_INNER)).join(', ');
   const indicatorDeadline = Date.now() + 15_000;
   while (Date.now() < indicatorDeadline) {
-    if ((await page.locator(INDICATOR_SELECTOR).count().catch(() => 0)) > 0) {
+    if ((await page.locator(indicatorSelector).count().catch(() => 0)) > 0) {
       observed.indicatorAppeared = true;
       break;
     }
@@ -664,8 +716,8 @@ async function verifyAfterSend(
   let lastLog = Date.now();
   while (Date.now() < overallDeadline) {
     const [pending, failed] = await Promise.all([
-      page.locator('span[data-icon="msg-time"]').count().catch(() => 0),
-      page.locator(FAILED_SELECTOR).count().catch(() => 0),
+      page.locator(pendingSelector).count().catch(() => 0),
+      page.locator(failedSelector).count().catch(() => 0),
     ]);
     if (failed > 0) {
       observed.uploadPendingCleared = false;

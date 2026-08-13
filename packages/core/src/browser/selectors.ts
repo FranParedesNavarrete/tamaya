@@ -24,14 +24,22 @@ import {
 
 /**
  * Fila de canal en la lista lateral. Selector DINÁMICO (no editable).
- * El DOM real pone aria-label como "Canal <nombre>" en el elemento clickable.
+ *
+ * OJO con el formato del aria-label: WhatsApp lo INVIRTIÓ. Antes era
+ * "Canal <nombre>" (prefijo) y desde 2026-08 es "<nombre> Channel" (sufijo),
+ * sobre un `div[role="button"][data-testid="newsletter-tab-newsletter-cell"]`.
+ * Verificado con Playwright sobre dump real (2026-08-13). Se mantienen las
+ * variantes antiguas como fallback.
  */
 function channelRowByName(name: string): string[] {
   const escaped = name.replace(/"/g, '\\"');
   return [
+    `div[role="button"][aria-label="${escaped} Channel"]`,
+    `div[role="button"][aria-label="${escaped} Canal"]`,
+    `div[role="button"][data-testid="newsletter-tab-newsletter-cell"][aria-label^="${escaped}"]`,
+    `div[role="listitem"]:has(span[title="${escaped}"])`,
     `div[role="button"][aria-label="Canal ${escaped}"]`,
     `div[role="button"][aria-label="Channel ${escaped}"]`,
-    `div[role="listitem"]:has(span[title="${escaped}"])`,
     `div[role="listitem"]:has-text("${escaped}")`,
   ];
 }
@@ -39,12 +47,15 @@ function channelRowByName(name: string): string[] {
 /**
  * Composer de un canal específico. Selector DINÁMICO (no editable).
  * Doble verificación: si matchea, estás en el canal correcto.
+ * El formato inglés "Type a message to <canal>" está verificado en dump real
+ * (2026-08-13); se mantiene el español como fallback.
  */
 function messageComposerForChannel(channelName: string): string[] {
   const escaped = channelName.replace(/"/g, '\\"');
   return [
-    `div[contenteditable="true"][role="textbox"][aria-label="Escribir un mensaje para ${escaped}"]`,
     `div[contenteditable="true"][role="textbox"][aria-label="Type a message to ${escaped}"]`,
+    `div[contenteditable="true"][role="textbox"][aria-label="Escribir un mensaje para ${escaped}"]`,
+    `div[data-testid="conversation-compose-box-input"][aria-label*="${escaped}"]`,
   ];
 }
 
@@ -91,4 +102,4 @@ export function resetSelectorsToDefaults(): void {
 // Reexport útil para consumidores que quieran los defaults sin overrides.
 export { EDITABLE_SELECTORS_DEFAULTS };
 
-export const SELECTORS_VERSION = '0.4.0';
+export const SELECTORS_VERSION = '0.5.0';

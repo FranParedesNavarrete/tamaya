@@ -17,13 +17,27 @@ import { z } from 'zod';
  * - NO se eliminan defaults: los overrides de `app_settings` se mergean encima
  *   con fallback a estos valores.
  *
- * Última revisión de los valores: 2026-04-18 (verificado en dump real del DOM).
+ * Última revisión de los valores: 2026-08-13 (verificado con Playwright contra
+ * dump real del DOM con canal abierto; UI en inglés, stack Comet/StyleX).
+ *
+ * Cambios de 2026-08-13 (WhatsApp Web rehizo parte del DOM):
+ * - Los `data-testid` volvieron y son el anchor más estable (`newsletter-tab-drawer`,
+ *   `conversation-compose-box-input`, `conversation-header`, `chat-subtitle`,
+ *   `conversation-panel-messages`, `conv-msg-*`). Van primeros.
+ * - El buscador de canales ya NO es un `div[contenteditable]`: es un
+ *   `<input type="text" role="textbox" aria-label="Search">`.
+ * - Los ticks de mensaje ya NO usan `data-icon="msg-*"`: ahora son
+ *   `<svg><title>wds-ic-delivered|wds-ic-read</title>`.
+ * - El panel de canales cambió de aria-label a "Channel tab drawer".
+ * - Los `id` de React (`_r_bj_`) cambian en cada render: NUNCA usarlos.
  */
 export const EDITABLE_SELECTORS_DEFAULTS = {
   // --- App lifecycle ---
   // Marcador de "WA Web cargado y sesión activa" (pane lateral con la lista de chats).
   appReady: [
     '#pane-side',
+    'div[data-testid="wa-web-main-screen"]',
+    '#side',
     'div[aria-label="Lista de chats" i]',
     'div[aria-label="Chat list" i]',
     'header',
@@ -37,36 +51,59 @@ export const EDITABLE_SELECTORS_DEFAULTS = {
 
   // --- Navegación a canales ---
   channelsTab: [
-    'button[aria-label="Canales"]',
     'button[aria-label="Channels"]',
+    'button[aria-label="Canales"]',
+    // Anchor por icono: sobrevive a cambios de idioma.
+    'button:has(span[data-icon="newsletter-tab"])',
+    'button:has(> div svg > title:text-is("newsletter-tab"))',
+    // El navbar izquierdo indexa sus items; Channels es el 3.
+    'button[data-navbar-item="true"][data-navbar-item-index="3"]',
     'div[role="button"][aria-label="Canales"]',
     'div[role="button"][aria-label="Channels"]',
   ],
   channelsTabActive: [
-    'button[aria-pressed="true"][aria-label="Canales"]',
     'button[aria-pressed="true"][aria-label="Channels"]',
+    'button[aria-pressed="true"][aria-label="Canales"]',
+    'button[aria-pressed="true"]:has(span[data-icon="newsletter-tab"])',
+    'button[aria-pressed="true"][data-navbar-item-index="3"]',
   ],
   channelsPanel: [
+    'div[data-testid="newsletter-tab-drawer"]',
+    'div[aria-label*="Channel tab" i]',
     'div[aria-label="Contenedor de la pestaña Canales"]',
     'div[aria-label*="Channels tab" i]',
   ],
   channelsList: [
-    'div[aria-label="Lista de canales"]',
-    'div[aria-label="Channel list"]',
+    'div[aria-label*="Channel list" i]',
+    'div[role="navigation"][aria-label*="Channel list" i]',
+    'div[aria-label*="Lista de canales" i]',
     'div[role="grid"][aria-label*="canales" i]',
     'div[role="grid"][aria-label*="channels" i]',
   ],
+  // OJO: desde 2026-08 es un <input type="text"> nativo, no un contenteditable.
+  // Va scopeado al drawer de canales para no capturar el buscador de chats
+  // ("Search or start a new chat"), que vive en el panel de la izquierda.
   channelsSearchInput: [
+    'div[data-testid="newsletter-tab-drawer"] input[type="text"][role="textbox"]',
+    'div[data-testid="newsletter-tab-drawer"] input[type="text"]',
+    'div[data-testid="newsletter-tab-drawer"] input[role="textbox"][aria-label*="Search" i]',
+    'div[data-testid="newsletter-tab-drawer"] input[role="textbox"][aria-label*="Buscar" i]',
+    'div[aria-label*="Channel tab" i] input[type="text"]',
     'div[aria-label*="Buscar canales" i][contenteditable="true"]',
     'div[aria-label*="Search channels" i][contenteditable="true"]',
     'div[contenteditable="true"][role="textbox"][aria-label*="canales" i]',
     'div[contenteditable="true"][role="textbox"][aria-label*="channels" i]',
   ],
   openChannelHeader: [
+    'header[data-testid="conversation-header"]',
     'header',
   ],
   // Contador de seguidores — anchor fuerte de "canal abierto".
   openChannelSubscriberCount: [
+    'div[data-testid="chat-subtitle"] span[aria-label$="follower"]',
+    'div[data-testid="chat-subtitle"] span[aria-label$="followers"]',
+    'div[data-testid="chat-subtitle"] span[aria-label$="seguidor"]',
+    'div[data-testid="chat-subtitle"] span[aria-label$="seguidores"]',
     'span[aria-label$="seguidores"]',
     'span[aria-label$="seguidor"]',
     'span[aria-label$="followers"]',
@@ -75,33 +112,36 @@ export const EDITABLE_SELECTORS_DEFAULTS = {
 
   // --- Composer ---
   messageComposer: [
-    'div[contenteditable="true"][role="textbox"][aria-label^="Escribir un mensaje"]',
+    'div[data-testid="conversation-compose-box-input"]',
     'div[contenteditable="true"][role="textbox"][aria-label^="Type a message"]',
+    'div[contenteditable="true"][role="textbox"][aria-label^="Escribir un mensaje"]',
     'div[contenteditable="true"][data-lexical-editor="true"][role="textbox"]',
     'footer div[contenteditable="true"][role="textbox"]',
   ],
   // Botón enviar. NO existe con composer vacío; aparece tras tipear.
+  // El aria-label puede llevar sufijo dinámico ("Send 1 selected") ⇒ prefix-match.
   sendButton: [
     'div[role="button"][aria-label^="Send"]',
     'div[role="button"][aria-label^="Enviar"]',
     'button[aria-label^="Send"]',
     'button[aria-label^="Enviar"]',
-    'button[aria-label="Send"]',
-    'button[aria-label="Enviar"]',
-    'div[role="button"][aria-label="Send"]',
-    'div[role="button"][aria-label="Enviar"]',
-    'span[data-icon="send"]',
     'span[data-icon="wds-ic-send-filled"]',
+    'span[data-icon="send"]',
+    // WA está migrando de data-icon a <svg><title>wds-ic-…</title>.
+    'span:has(> svg > title:text-is("wds-ic-send-filled"))',
+    'span:has(> svg > title:text-is("send"))',
   ],
   micButton: [
     'span[data-icon="mic-outlined"]',
-    'span[data-icon="ptt"]',
-    'button[aria-label="Mensaje de voz"]',
     'button[aria-label="Voice message"]',
+    'button[aria-label="Mensaje de voz"]',
+    'span[data-icon="ptt"]',
+    'span:has(> svg > title:text-is("mic-outlined"))',
   ],
 
   // --- Overlay de onboarding del canal ---
   onboardingOverlay: [
+    'div:has(> * > * > [aria-label="Close"]):has-text("follower")',
     'div:has(> * > * > [aria-label="Cerrar"]):has-text("seguidores")',
   ],
   onboardingCloseButton: [
@@ -113,24 +153,41 @@ export const EDITABLE_SELECTORS_DEFAULTS = {
 
   // --- Adjuntar media ---
   attachButton: [
-    'button[aria-label="Adjuntar"]',
     'button[aria-label="Attach"]',
+    'button[aria-label="Adjuntar"]',
+    'span[data-icon="plus-rounded"]',
+    'button[aria-haspopup="menu"][aria-label*="Attach" i]',
+    'button[aria-haspopup="menu"][aria-label*="Adjuntar" i]',
     'div[title="Adjuntar"]',
     'div[title="Attach"]',
     'span[data-icon="plus"]',
-    'span[data-icon="plus-rounded"]',
     'span[data-icon="clip"]',
+    'span:has(> svg > title:text-is("plus-rounded"))',
   ],
+  // El menú de adjuntos solo existe tras clicar "+", así que estos selectores
+  // no se pueden verificar en un dump en reposo: se mantienen anchos a propósito.
   attachMenuPhotosVideos: [
+    '[role="menuitem"][aria-label*="Photos" i]',
+    '[role="menuitem"][aria-label*="Fotos" i]',
     'button[role="menuitem"][aria-label="Photos & videos"]',
     'button[role="menuitem"][aria-label="Fotos y vídeos"]',
-    'button[role="menuitem"][aria-label*="Photos" i]',
-    'button[role="menuitem"][aria-label*="Fotos" i]',
+    'li[role="menuitem"]:has-text("Photos & videos")',
+    'li[role="menuitem"]:has-text("Fotos y vídeos")',
+    '[role="menuitem"]:has-text("Photos & videos")',
+    '[role="menuitem"]:has-text("Fotos y vídeos")',
+    '[role="button"][aria-label*="Photos & videos" i]',
+    '[aria-label*="Photos & videos" i]',
   ],
+  // El input de imagen+vídeo se crea al abrir el menú de adjuntos. En reposo el
+  // único input del DOM es `accept="image/*"` sin `multiple` (= el de sticker),
+  // por eso el candidato permisivo va ÚLTIMO: si cae ahí, `assertNotStickerPreview`
+  // aborta antes de enviar en lugar de publicar una pegatina.
   fileInputImageVideo: [
     'input[type="file"][accept*="image"][accept*="video"]',
     'input[type="file"][accept="*"][multiple]',
     'input[type="file"][multiple]',
+    'input[type="file"][accept*="video"]',
+    'input[type="file"][accept*="image"]',
   ],
   fileInputDocument: [
     'input[type="file"][accept="*"][multiple]',
@@ -144,8 +201,12 @@ export const EDITABLE_SELECTORS_DEFAULTS = {
   mediaPreviewReady: [
     'img[alt="Preview"][src^="blob:"]',
     'video[src^="blob:"]',
-    'div[role="button"][aria-label="Send"]',
-    'div[role="button"][aria-label="Enviar"]',
+    // Caja de caption del preview (excluyendo el composer del canal, ver abajo).
+    'div[contenteditable="true"][role="textbox"][aria-placeholder="Type an update"]:not([aria-label^="Type a message"]):not([aria-label^="Escribir un mensaje"])',
+    'div[role="button"][aria-label^="Send"]',
+    'div[role="button"][aria-label^="Enviar"]',
+    'button[aria-label^="Send"]',
+    'button[aria-label^="Enviar"]',
     'div[role="dialog"]:has(img[src^="blob:"])',
     'div[role="dialog"]:has(video)',
   ],
@@ -153,12 +214,24 @@ export const EDITABLE_SELECTORS_DEFAULTS = {
     '[aria-label="Sticker"]',
     '[aria-label="Pegatina"]',
   ],
+  /**
+   * Caja de caption del preview de media.
+   *
+   * CUIDADO — colisión real: el composer normal del canal lleva
+   * `aria-placeholder="Type an update"` junto a `aria-label="Type a message to <canal>"`.
+   * Los selectores por `aria-placeholder` sin filtrar matcheaban ese composer,
+   * con dos consecuencias: (a) el caption podía escribirse en la caja del canal
+   * en vez de en el preview, y (b) `assertNotStickerPreview` creía siempre que
+   * había preview normal y nunca detectaba el modo pegatina.
+   * Por eso todas las variantes por placeholder excluyen el composer del canal.
+   */
   captionInputOnPreview: [
     'div[contenteditable="true"][role="textbox"][aria-label="Type an update"]',
-    'div[contenteditable="true"][role="textbox"][aria-label*="update" i]',
-    'div[contenteditable="true"][role="textbox"][aria-label*="actualiza" i]',
-    'div[contenteditable="true"][role="textbox"][aria-placeholder="Type an update"]',
-    'div[contenteditable="true"][role="textbox"][aria-placeholder*="update" i]',
+    'div[contenteditable="true"][role="textbox"][aria-label*="update" i]:not([aria-label^="Type a message"])',
+    'div[contenteditable="true"][role="textbox"][aria-label*="actualiza" i]:not([aria-label^="Escribir un mensaje"])',
+    'div[contenteditable="true"][role="textbox"][aria-placeholder="Type an update"]:not([aria-label^="Type a message"]):not([aria-label^="Escribir un mensaje"])',
+    'div[contenteditable="true"][role="textbox"][aria-placeholder*="update" i]:not([aria-label^="Type a message"]):not([aria-label^="Escribir un mensaje"])',
+    'div[contenteditable="true"][role="textbox"][aria-placeholder*="actualiza" i]:not([aria-label^="Type a message"]):not([aria-label^="Escribir un mensaje"])',
     'div[contenteditable="true"][role="textbox"][aria-label*="caption" i]',
     'div[contenteditable="true"][role="textbox"][aria-label*="leyenda" i]',
     'div[contenteditable="true"][role="textbox"][aria-label*="pie" i]',
@@ -167,16 +240,26 @@ export const EDITABLE_SELECTORS_DEFAULTS = {
 
   // --- Mensajes en el hilo ---
   lastMessageBubble: [
+    'div[data-testid="conversation-panel-messages"] div[data-testid^="conv-msg-"]',
+    'div[data-testid^="conv-msg-"]',
+    'div[data-testid="conversation-panel-messages"] div[role="row"]',
     'div[role="row"]:last-of-type',
-    'div.message-out:last-of-type',
     'div[data-pre-plain-text]:last-of-type',
+    'div.message-out:last-of-type',
   ],
   messageText: [
+    'span[data-testid="selectable-text"]',
     'span.selectable-text[dir="ltr"]',
     'span.selectable-text[dir="auto"]',
-    'span[data-testid="selectable-text"]',
   ],
+  // Desde 2026-08 los ticks son <svg><title>wds-ic-delivered|wds-ic-read</title>.
+  // OJO: `span[aria-label*="Sent" i]` a secas es un FALSO POSITIVO — matchea el
+  // aviso "New messages will disappear … after they're sent"; hay que exigir svg.
   messageSentTick: [
+    'div[data-testid="conversation-panel-messages"] span:has(> svg > title:text-is("wds-ic-delivered"))',
+    'div[data-testid="conversation-panel-messages"] span:has(> svg > title:text-is("wds-ic-read"))',
+    'span[aria-label*="Sent" i]:has(> svg > title)',
+    'span[aria-label*="Read" i]:has(> svg > title)',
     'span[data-icon="msg-check"]',
     'span[data-icon="msg-dblcheck"]',
     'span[data-icon="msg-time"]',
