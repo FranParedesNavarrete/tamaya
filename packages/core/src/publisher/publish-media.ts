@@ -9,7 +9,7 @@
  *  5. Escribir caption si hay
  *  6. Enviar desde el dialog del preview
  */
-import type { Page } from 'playwright';
+import type { Locator, Page } from 'playwright';
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -345,10 +345,25 @@ async function attachMedia(page: Page, paths: string[], kind: MediaKind): Promis
       ? [...SELECTORS.fileInputDocument, ...SELECTORS.fileInputImageVideo]
       : [...SELECTORS.fileInputImageVideo, ...SELECTORS.fileInputDocument];
 
+  logger.info({ inputs: await fileInputInventory(page) }, 'file inputs available before fallback');
+
   for (const sel of inputSelectors) {
     const input = page.locator(sel).first();
     const count = await input.count().catch(() => 0);
     if (count === 0) continue;
+
+    // El input de pegatinas (accept="image/*" SIN multiple) no sirve para
+    // publicar foto/vídeo: WA abre el editor de stickers y el preview normal
+    // nunca aparece. `fileInputImageVideo` termina en un candidato permisivo
+    // (`input[accept*="image"]`) que matchea justo ese input, y la salvaguarda
+    // `assertNotStickerPreview` corre DESPUÉS de esperar el preview, así que
+    // nunca llegaba a saltar: el job moría antes con un timeout que no decía
+    // nada. Se descarta aquí, que es donde se puede distinguir.
+    if (kind !== 'document' && kind !== 'audio' && (await isStickerInput(input))) {
+      logger.warn({ selector: sel }, 'skipping sticker file input (accept="image/*" without multiple)');
+      continue;
+    }
+
     try {
       await input.setInputFiles(paths);
       logger.info({ selector: sel, paths, count: paths.length }, 'media attached (fallback input)');
@@ -357,7 +372,44 @@ async function attachMedia(page: Page, paths: string[], kind: MediaKind): Promis
       logger.debug({ selector: sel, err }, 'setInputFiles failed, trying next');
     }
   }
-  throw new Error(`no compatible file input found for media kind=${kind}`);
+  throw new Error(
+    `no compatible file input found for media kind=${kind}; inputs presentes: ${JSON.stringify(
+      await fileInputInventory(page),
+    )}`,
+  );
+}
+
+/**
+ * ¿Es el input del editor de pegatinas? (`accept="image/*"` sin `multiple`).
+ *
+ * Se leen los atributos con getAttribute en vez de `evaluate`: el tsconfig de
+ * core no incluye la lib `dom`, así que dentro del navegador no hay tipos.
+ */
+async function isStickerInput(input: Locator): Promise<boolean> {
+  const accept = (await input.getAttribute('accept').catch(() => null)) ?? '';
+  const multiple = (await input.getAttribute('multiple').catch(() => null)) !== null;
+  return accept.replace(/\s/g, '') === 'image/*' && !multiple;
+}
+
+/**
+ * Inventario de los `input[type=file]` del DOM.
+ *
+ * Es el dato que faltaba para diagnosticar los fallos de adjuntar: los inputs
+ * son invisibles, así que `diagnoseSelectors` los reporta como "presente pero
+ * OCULTO" sin decir cuál es cuál. Con accept/multiple se distingue el de
+ * foto+vídeo del de pegatinas y del de documento.
+ */
+async function fileInputInventory(
+  page: Page,
+): Promise<Array<{ accept: string; multiple: boolean }>> {
+  // evaluate por string (igual que waitForVideoReady): sin lib `dom` en core.
+  const raw = await page
+    .evaluate(
+      `Array.from(document.querySelectorAll('input[type="file"]'))
+         .map((el) => ({ accept: el.accept, multiple: el.multiple }))`,
+    )
+    .catch(() => []);
+  return Array.isArray(raw) ? (raw as Array<{ accept: string; multiple: boolean }>) : [];
 }
 
 /**
@@ -373,7 +425,24 @@ async function waitForMediaPreview(
 ): Promise<void> {
   const timeout = scaledTimeout(TIMEOUTS[kind].preview, sizeMb);
   logger.info({ kind, sizeMb: sizeMb.toFixed(2), timeoutMs: timeout }, 'waiting for media preview');
-  await waitForAny(page, SELECTORS.mediaPreviewReady, { timeout });
+  try {
+    await waitForAny(page, SELECTORS.mediaPreviewReady, { timeout });
+  } catch (err) {
+    // Un timeout aquí solo dice "ningún selector de preview matcheó", que puede
+    // ser (a) el media no se adjuntó, (b) se adjuntó al input equivocado, o
+    // (c) el preview está abierto pero con otro DOM. Sin estos datos no se
+    // pueden distinguir, y el error del job es lo único que se ve desde fuera.
+    const [inputs, stickerMode, dialogs] = await Promise.all([
+      fileInputInventory(page),
+      page.locator(SELECTORS.stickerPreviewIndicator.join(', ')).count().catch(() => 0),
+      page.locator('div[role="dialog"]').count().catch(() => 0),
+    ]);
+    throw new Error(
+      `${err instanceof Error ? err.message : String(err)} | contexto: ` +
+        `inputs=${JSON.stringify(inputs)} dialogosAbiertos=${dialogs} ` +
+        `indicadorSticker=${stickerMode}`,
+    );
+  }
   await humanPause(page, [500, 900]);
   logger.info('media preview ready');
 }

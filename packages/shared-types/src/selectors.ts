@@ -255,9 +255,13 @@ export const EDITABLE_SELECTORS_DEFAULTS = {
   ],
   mediaPreviewReady: [
     'img[alt="Preview"][src^="blob:"]',
+    // El alt está traducido: en español es "Vista previa".
+    'img[alt="Vista previa"][src^="blob:"]',
     'video[src^="blob:"]',
     // Caja de caption del preview (excluyendo el composer del canal, ver abajo).
     'div[contenteditable="true"][role="textbox"][aria-placeholder="Type an update"]:not([aria-label^="Type a message"]):not([aria-label^="Escribir un mensaje"])',
+    // Misma caja de caption con la UI en español.
+    'div[contenteditable="true"][role="textbox"][aria-placeholder*="actualiza" i]:not([aria-label^="Type a message"]):not([aria-label^="Escribir un mensaje"])',
     'div[role="button"][aria-label^="Send"]',
     'div[role="button"][aria-label^="Enviar"]',
     'button[aria-label^="Send"]',
