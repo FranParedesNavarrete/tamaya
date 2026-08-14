@@ -21,3 +21,14 @@ export { dismissBlockingDialogs } from './browser/dialogs.js';
 export type { AppState, AppStateReport } from './browser/app-state.js';
 export type { PublishTextInput, PublishResult } from './publisher/publish-text.js';
 export type { PublishMediaInput } from './publisher/publish-media.js';
+export { readChannelInsights, readReachTab } from './metrics/channel-insights.js';
+export type {
+  ChannelInsights,
+  ChannelReach,
+  ReachSegment,
+  BarChartRow,
+  InsightsDateRange,
+  Metric,
+} from './metrics/channel-insights.js';
+export { parseWaNumber, parseWaPercent } from './metrics/parse-number.js';
+export type { ParsedNumber } from './metrics/parse-number.js';

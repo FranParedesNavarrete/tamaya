@@ -39,6 +39,8 @@ import { z } from 'zod';
  *   3 es Communities, no Channels. Se ancla al icono `wds-ic-channels`.
  * - Los selectores en español estaban ya cubiertos (`Canales`, `Buscar`,
  *   `Canal <nombre>`); el idioma NO era la causa de los fallos.
+ * - Selectores de Estadísticas del canal (`insights*`) para la lectura de
+ *   métricas; ver `metrics/channel-insights.ts`.
  */
 export const EDITABLE_SELECTORS_DEFAULTS = {
   // --- App lifecycle ---
@@ -290,6 +292,52 @@ export const EDITABLE_SELECTORS_DEFAULTS = {
     'div[contenteditable="true"][role="textbox"][aria-label*="pie" i]',
     'div[contenteditable="true"][role="textbox"][aria-placeholder*="leyenda" i]',
   ],
+
+  // --- Estadísticas del canal (drawer "Estadísticas", solo admin) ---
+  // Verificado contra dump real (UI en español, 2026-08-14). Los data-testid de
+  // este panel son estables y en inglés aunque la UI esté traducida, así que van
+  // primeros; los fallbacks por `title` cubren es/en si Meta los quitara.
+  insightsDrawer: [
+    'div[data-testid="newsletter-insights-drawer"]',
+    'div:has(> header [data-testid="drawer-title-body"] h2:text-is("Estadísticas"))',
+    'div:has(> header [data-testid="drawer-title-body"] h2:text-is("Insights"))',
+  ],
+  insightsTabReach: [
+    'button[data-testid="newsletter-insights-tab-reach"]',
+    'button[role="tab"][title="Alcance"]',
+    'button[role="tab"][title="Reach"]',
+  ],
+  insightsTabGrowth: [
+    'button[data-testid="newsletter-insights-tab-growth"]',
+    'button[role="tab"][title="Crecimiento"]',
+    'button[role="tab"][title="Growth"]',
+  ],
+  insightsTabFollowers: [
+    'button[data-testid="newsletter-insights-tab-followers"]',
+    'button[role="tab"][title="Seguidores"]',
+    'button[role="tab"][title="Followers"]',
+  ],
+  // Rango de fechas del panel ("Últimos 30 días" + "14 jul. - 12 ago.").
+  // No tiene testid: se ancla al icono de calendario y se sube al contenedor.
+  insightsDateRangeRow: [
+    'div:has(> span > svg > title:text-is("ic-calendar-month"))',
+    'div:has(> span[data-icon="calendar-month"])',
+  ],
+  // Total de "Cuentas alcanzadas". Este SÍ viene sin abreviar.
+  insightsReachTotal: [
+    'div[data-testid="newsletter-admin-insights-reach-widget-count"]',
+  ],
+  // Filas de la leyenda del donut: "Seguidores" / "No seguidores".
+  insightsReachLegendItem: [
+    'div[data-testid^="newsletter-reach-widget-legend-item-"]',
+  ],
+  insightsLegendCount: ['div[data-testid="reach-widget-count"]'],
+  insightsLegendDelta: ['div[data-testid="reach-widget-delta"]'],
+  // Barras de "Principales regiones" (y de cualquier otro bar-chart del panel).
+  insightsBarChartRow: ['div[data-testid^="bar-chart-row-"]'],
+  insightsBarLabel: ['div[data-testid="label"]'],
+  insightsBarValue: ['div[data-testid="value"]'],
+  insightsBarPercent: ['div[data-testid="percentage"]'],
 
   // --- Mensajes en el hilo ---
   lastMessageBubble: [
