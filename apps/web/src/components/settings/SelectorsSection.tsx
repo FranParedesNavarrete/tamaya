@@ -43,10 +43,16 @@ export function SelectorsSection() {
     try {
       const d = await api.getSelectors();
       setData(d);
-      // Mostrar un JSON útil desde el primer momento. Antes salía `{}` si no
-      // había overrides, lo que hacía difícil saber qué se podía tocar. Editar
-      // este JSON guarda overrides explícitos con fallback seguro a defaults.
-      setText(JSON.stringify(d.effective ?? d.defaults ?? {}, null, 2));
+      // El textarea contiene SOLO los overrides guardados, porque es exactamente
+      // lo que se persiste al pulsar Guardar.
+      //
+      // Antes se rellenaba con los selectores EFECTIVOS (las 41 claves). Eso
+      // convertía cualquier "Guardar" en un snapshot completo del código, y a
+      // partir de ahí los defaults nuevos de cada despliegue quedaban tapados
+      // por la copia congelada en BD: los arreglos de selectores no llegaban a
+      // producción y había que volver a guardar a mano. Los efectivos se
+      // consultan abajo, en un bloque de solo lectura.
+      setText(JSON.stringify(d.overrides ?? {}, null, 2));
     } catch (e) {
       setValidationError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -69,7 +75,7 @@ export function SelectorsSection() {
     try {
       const r = await api.putSelectors(res.value);
       setData({ ...data, overrides: r.overrides, effective: r.effective });
-      setText(JSON.stringify(r.effective, null, 2));
+      setText(JSON.stringify(r.overrides ?? {}, null, 2));
       setOkMsg(r.note);
     } catch (e) {
       setValidationError(e instanceof Error ? e.message : String(e));
@@ -86,7 +92,10 @@ export function SelectorsSection() {
     try {
       const r = await api.resetSelectors();
       if (data) setData({ ...data, overrides: r.overrides, effective: r.effective });
-      setText(JSON.stringify(r.effective, null, 2));
+      // Sin overrides el editor queda vacío. Rellenarlo con los efectivos hacía
+      // que el panel se viera IGUAL antes y después de restaurar (parecía que el
+      // botón no hacía nada) y bastaba un Guardar para recrear el snapshot.
+      setText('{}');
       setOkMsg(r.note);
     } catch (e) {
       setValidationError(e instanceof Error ? e.message : String(e));
@@ -134,9 +143,27 @@ export function SelectorsSection() {
               />
               <p className="text-xs text-muted-foreground">
                 Formato: <code>{'{ "clave": ["selector1", "selector2"] }'}</code>. Solo claves editables;
-                cada valor es un array no vacío de selectores. El editor muestra los selectores efectivos actuales
-                para que puedas modificar directamente el JSON.
+                cada valor es un array no vacío de selectores.
               </p>
+              <p className="text-xs text-muted-foreground">
+                Incluye <strong>solo las claves que quieras sobrescribir</strong>. Las que no estén aquí
+                usan los defaults del código y se actualizan solas en cada despliegue. Un override
+                congela esa clave: deja de recibir correcciones hasta que lo borres.
+                <code>{'{}'}</code> = usar defaults para todo.
+              </p>
+
+              <details className="rounded-md border border-border p-2">
+                <summary className="cursor-pointer text-xs font-medium">
+                  Ver selectores efectivos ({data.editableKeys.length} claves) — solo consulta
+                </summary>
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  Copia de aquí la clave que necesites y pégala arriba. No pegues el bloque entero:
+                  sobrescribirías las {data.editableKeys.length} claves.
+                </p>
+                <pre className="mt-1.5 max-h-64 overflow-auto rounded bg-muted p-2 font-mono text-[10px] leading-tight">
+                  {JSON.stringify(data.effective, null, 2)}
+                </pre>
+              </details>
             </div>
 
             {validationError && (
