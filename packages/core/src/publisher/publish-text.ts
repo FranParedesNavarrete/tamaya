@@ -20,6 +20,7 @@ import {
 } from '../browser/session.js';
 import { SELECTORS } from '../browser/selectors.js';
 import { waitForAppReady } from '../browser/app-state.js';
+import { dismissBlockingDialogs, clickWithDialogGuard } from '../browser/dialogs.js';
 import {
   dumpDebugInfo,
   humanPause,
@@ -95,6 +96,9 @@ export async function publishText(input: PublishTextInput): Promise<PublishResul
 
     logger.info('waiting for app to be ready');
     await waitForAppReady(page, { timeout: 60_000 });
+    // WA Web abre modales ("What's new on WhatsApp Web"…) justo al cargar y
+    // bloquean cualquier click posterior. Cerrar antes de navegar.
+    await dismissBlockingDialogs(page);
 
     await navigateToChannel(page, input.channelIdentifier);
 
@@ -217,6 +221,8 @@ export async function navigateToChannel(
     logger.info({ link: ch.inviteLink }, 'navigating via invite link');
     try {
       await navigateByInviteLink(page, ch.inviteLink);
+      // El goto recarga la página ⇒ los modales de bienvenida vuelven a salir.
+      await dismissBlockingDialogs(page);
       await confirmChannelOpen(page, ch.name);
       await dismissOnboardingOverlays(page);
       return;
@@ -251,56 +257,16 @@ async function openChannelsTab(page: Page): Promise<void> {
   try {
     const tab = await waitForAny(page, SELECTORS.channelsTab, { timeout: 15_000 });
     await humanPause(page);
-    try {
-      await tab.click({ timeout: 8_000 });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!/intercepts pointer events|Timeout/i.test(msg)) throw err;
-      logger.warn({ err: msg }, 'Channels tab click blocked — trying to dismiss dialog');
-      await dismissBlockingDialogs(page);
-      await tab.click({ timeout: 8_000 });
-    }
+    await clickWithDialogGuard(page, tab, 'Channels tab');
     // Pequeña espera para que el panel lateral cambie.
     await page.waitForTimeout(800);
   } catch (err) {
     throw new Error(
-      `could not open Channels tab (selectors may be outdated): ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+      `could not open Channels tab: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 }
 
-/**
- * WA Web puede mostrar diálogos globales al iniciar sesión / entrar a Channels
- * (novedades, onboarding, permisos, "descarga la app", etc.). Si están abiertos
- * interceptan el click sobre la pestaña Channels aunque el selector sea correcto.
- * Cierre best-effort y conservador: primero botones Close/Cerrar visibles dentro
- * de role=dialog; si no, Escape. No falla si no hay nada.
- */
-async function dismissBlockingDialogs(page: Page): Promise<void> {
-  for (let i = 0; i < 3; i++) {
-    const dialog = page.locator('div[role="dialog"][aria-modal="true"], div[role="dialog"]').filter({ hasNotText: /^$/ }).first();
-    const visible = await dialog.isVisible({ timeout: 700 }).catch(() => false);
-    if (!visible) return;
-
-    const close = dialog.locator([
-      'button[aria-label="Cerrar"]',
-      'button[aria-label="Close"]',
-      'div[role="button"][aria-label="Cerrar"]',
-      'div[role="button"][aria-label="Close"]',
-      'span[data-icon="x"]',
-      'span[data-icon="x-alt"]',
-    ].join(',')).first();
-
-    if (await close.isVisible({ timeout: 500 }).catch(() => false)) {
-      await close.click({ timeout: 2_000 }).catch(() => undefined);
-    } else {
-      await page.keyboard.press('Escape').catch(() => undefined);
-    }
-    await page.waitForTimeout(500);
-  }
-}
 
 async function selectChannelByName(page: Page, name: string): Promise<void> {
   const selectors = SELECTORS.channelRowByName(name);
@@ -309,7 +275,7 @@ async function selectChannelByName(page: Page, name: string): Promise<void> {
   try {
     const row = await waitForAnyDynamic(page, selectors, { timeout: 8_000 });
     await humanPause(page);
-    await row.click();
+    await clickWithDialogGuard(page, row, `channel row "${name}"`);
     return;
   } catch {
     // No está a la vista — probar con el search de canales
@@ -320,7 +286,7 @@ async function selectChannelByName(page: Page, name: string): Promise<void> {
     const search = await waitForAny(page, SELECTORS.channelsSearchInput, {
       timeout: 5_000,
     });
-    await search.click();
+    await clickWithDialogGuard(page, search, 'channels search input');
     await humanType(page, name, { minDelayMs: 50, maxDelayMs: 120 });
     await page.waitForTimeout(600);
 

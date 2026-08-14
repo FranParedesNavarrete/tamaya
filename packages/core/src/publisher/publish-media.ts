@@ -19,6 +19,7 @@ import {
 } from '../browser/session.js';
 import { SELECTORS } from '../browser/selectors.js';
 import { waitForAppReady } from '../browser/app-state.js';
+import { dismissBlockingDialogs } from '../browser/dialogs.js';
 import {
   dumpDebugInfo,
   humanPause,
@@ -169,8 +170,17 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
     const page = context.pages()[0] ?? (await context.newPage());
     await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded' });
     await waitForAppReady(page, { timeout: 60_000 });
+    // WA Web abre modales ("What's new on WhatsApp Web"…) justo al cargar y
+    // bloquean cualquier click posterior. Cerrar antes de navegar.
+    await dismissBlockingDialogs(page);
 
     await navigateToChannel(page, input.channelIdentifier);
+
+    // Segunda pasada: abrir el canal puede disparar su propio onboarding, y el
+    // click sobre "+" (adjuntar) es lo primero que se interceptaría.
+    // OJO: esto va ANTES de adjuntar. Después existe el preview de media, que
+    // también es role=dialog y NO debe cerrarse (ver selectores blockingDialog).
+    await dismissBlockingDialogs(page);
 
     await attachMedia(page, mediaPaths, input.mediaKind);
     await waitForMediaPreview(page, input.mediaKind, sizeMb);

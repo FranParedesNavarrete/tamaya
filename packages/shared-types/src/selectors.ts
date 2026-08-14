@@ -30,6 +30,15 @@ import { z } from 'zod';
  *   `<svg><title>wds-ic-delivered|wds-ic-read</title>`.
  * - El panel de canales cambió de aria-label a "Channel tab drawer".
  * - Los `id` de React (`_r_bj_`) cambian en cada render: NUNCA usarlos.
+ *
+ * Cambios de 2026-08-14 (verificado contra dumps reales en inglés Y español):
+ * - Nuevas claves `blockingDialog` / `blockingDialogDismiss`: WA abre modales al
+ *   entrar ("What's new on WhatsApp Web") que interceptan TODOS los clicks. El
+ *   síntoma es un timeout que parece selector roto; ver `browser/dialogs.ts`.
+ * - `channelsTab` ya no usa `data-navbar-item-index`: el índice se reordena y el
+ *   3 es Communities, no Channels. Se ancla al icono `wds-ic-channels`.
+ * - Los selectores en español estaban ya cubiertos (`Canales`, `Buscar`,
+ *   `Canal <nombre>`); el idioma NO era la causa de los fallos.
  */
 export const EDITABLE_SELECTORS_DEFAULTS = {
   // --- App lifecycle ---
@@ -48,24 +57,68 @@ export const EDITABLE_SELECTORS_DEFAULTS = {
     'canvas[aria-label*="Escanea" i]',
     'div[data-ref] canvas',
   ],
+  /**
+   * Diálogos modales globales que WA Web abre nada más entrar: "What's new on
+   * WhatsApp Web", onboarding, avisos de descarga de la app, permisos…
+   *
+   * Bloquean TODO: llevan `aria-modal="true"` + backdrop
+   * (`div[data-animate-modal-backdrop]`), así que cualquier click posterior
+   * falla con "element intercepts pointer events" aunque el selector destino
+   * sea correcto. Hay que cerrarlos antes de navegar.
+   *
+   * CUIDADO: el preview de media TAMBIÉN es `role="dialog"`. Los candidatos
+   * genéricos excluyen los diálogos que contienen blob (imagen/vídeo cargados)
+   * para no cerrar el preview antes de pulsar Send.
+   */
+  blockingDialog: [
+    'div[data-testid="confirm-popup"] div[role="dialog"][aria-modal="true"]',
+    'div[role="dialog"]:has(div[data-testid="popup-contents"])',
+    'div[role="dialog"][aria-modal="true"]:not(:has(img[src^="blob:"])):not(:has(video[src^="blob:"]))',
+    'div[role="alertdialog"]',
+  ],
+  /**
+   * Botones que cierran esos diálogos, por orden de preferencia: primero el
+   * aspa (no acepta nada), luego los "continuar / entendido" por texto exacto.
+   * Se buscan SIEMPRE scopeados dentro del diálogo.
+   */
+  blockingDialogDismiss: [
+    'button[aria-label="Close"]',
+    'button[aria-label="Cerrar"]',
+    'div[role="button"][aria-label="Close"]',
+    'div[role="button"][aria-label="Cerrar"]',
+    'span[data-icon="x"]',
+    'span[data-icon="x-alt"]',
+    'button:has(svg > title:text-is("ic-close"))',
+    'button:has(span:text-is("Continue"))',
+    'button:has(span:text-is("Continuar"))',
+    'button:has(span:text-is("OK"))',
+    'button:has(span:text-is("Got it"))',
+    'button:has(span:text-is("Entendido"))',
+    'button:has(span:text-is("Not now"))',
+    'button:has(span:text-is("Ahora no"))',
+  ],
 
   // --- Navegación a canales ---
   channelsTab: [
     'button[aria-label="Channels"]',
     'button[aria-label="Canales"]',
-    // Anchor por icono: sobrevive a cambios de idioma.
+    // Anchors por icono: sobreviven a cambios de idioma Y de posición.
+    // El icono actual es wds-ic-channels; newsletter-tab es el histórico.
+    'button:has(svg > title:text-is("wds-ic-channels"))',
     'button:has(span[data-icon="newsletter-tab"])',
     'button:has(> div svg > title:text-is("newsletter-tab"))',
-    // El navbar izquierdo indexa sus items; Channels es el 3.
-    'button[data-navbar-item="true"][data-navbar-item-index="3"]',
+    // NO usar data-navbar-item-index a secas: el índice se reordena. En el DOM
+    // de 2026-08-14 Channels es el 2 y el 3 es Communities, así que un
+    // índice equivocado abre otra pestaña en silencio. Se exige el icono.
+    'button[data-navbar-item="true"]:has(svg > title:text-is("wds-ic-channels"))',
     'div[role="button"][aria-label="Canales"]',
     'div[role="button"][aria-label="Channels"]',
   ],
   channelsTabActive: [
     'button[aria-pressed="true"][aria-label="Channels"]',
     'button[aria-pressed="true"][aria-label="Canales"]',
+    'button[aria-pressed="true"]:has(svg > title:text-is("wds-ic-channels"))',
     'button[aria-pressed="true"]:has(span[data-icon="newsletter-tab"])',
-    'button[aria-pressed="true"][data-navbar-item-index="3"]',
   ],
   channelsPanel: [
     'div[data-testid="newsletter-tab-drawer"]',
