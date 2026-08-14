@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile, stat } from 'node:fs/promises';
+import { mkdir, writeFile, stat, rename, open } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { dirname, extname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -75,20 +75,36 @@ export class MediaResolver {
     if (!m) throw new Error(`invalid s3 uri: ${source}`);
     const [, bucket, key] = m;
 
-    const target = this.targetPathFor(source, extname(key));
-    await mkdir(dirname(target), { recursive: true });
+    // La extensión de la key es solo una pista: muchos objetos se suben sin
+    // extensión y/o sin ContentType, y ahí acabábamos en .bin — que WA Web
+    // rechaza sin decir nada. El contenido se comprueba abajo.
+    const declaredExt = allowedExt(extname(key));
+    const stagingPath = this.targetPathFor(source, declaredExt ?? '.part');
+    await mkdir(dirname(stagingPath), { recursive: true });
 
     const cmd = new GetObjectCommand({ Bucket: bucket, Key: key });
     const resp = await this.getS3().send(cmd);
     if (!resp.Body) throw new Error(`empty S3 body: ${source}`);
 
-    await pipeline(resp.Body as Readable, createWriteStream(target));
-    const st = await stat(target);
+    await pipeline(resp.Body as Readable, createWriteStream(stagingPath));
+    const st = await stat(stagingPath);
     this.assertSize(st.size, source);
+
+    const sniffedExt = sniffExtension(await readHead(stagingPath, 16));
+    const chosenExt = sniffedExt ?? declaredExt ?? extensionFromMime(resp.ContentType ?? '');
+    if (chosenExt === undefined) {
+      throw new Error(
+        `no se pudo determinar el tipo de ${source}: ContentType=${resp.ContentType ?? 'ninguno'}, ` +
+          `key sin extensión reconocible. WhatsApp Web rechaza los archivos sin tipo reconocible.`,
+      );
+    }
+
+    const target = this.targetPathFor(source, chosenExt);
+    if (target !== stagingPath) await rename(stagingPath, target);
 
     return {
       localPath: target,
-      mime: resp.ContentType ?? mimeFromExtension(target),
+      mime: mimeFromExtension(target) ?? resp.ContentType,
       sizeBytes: st.size,
       originalSource: source,
     };
@@ -118,16 +134,39 @@ export class MediaResolver {
       const nameExt = hint.originalName ? allowedExt(extname(hint.originalName)) : undefined;
       const ctExt = contentType ? extensionFromMime(contentType) : undefined;
       const urlExt = allowedExt(extname(new URL(url).pathname));
-      const chosenExt = hintExt || nameExt || ctExt || urlExt || '.bin';
-
-      const target = this.targetPathFor(url, chosenExt);
-      await mkdir(dirname(target), { recursive: true });
+      const declaredExt = hintExt || nameExt || ctExt || urlExt;
 
       const buf = Buffer.from(await resp.arrayBuffer());
       this.assertSize(buf.byteLength, url);
+
+      // 6. El contenido manda. Las cabeceras y las pistas mienten (o faltan):
+      // un servidor que responde `application/octet-stream` nos dejaba en .bin,
+      // y con .bin Playwright sube el archivo como octet-stream, WA Web no lo
+      // reconoce y NO abre preview — el job se quedaba 25s esperando un preview
+      // que no iba a existir, sin un error que lo explicase.
+      const sniffedExt = sniffExtension(buf);
+      if (sniffedExt !== undefined && declaredExt !== undefined && sniffedExt !== declaredExt) {
+        // Discrepancia real: gana el contenido, porque es lo que WA va a leer.
+        console.warn(
+          `[media-resolver] extensión declarada ${declaredExt} != contenido ${sniffedExt} (${url}); se usa el contenido`,
+        );
+      }
+      const chosenExt = sniffedExt ?? declaredExt;
+
+      if (chosenExt === undefined) {
+        throw new Error(
+          `no se pudo determinar el tipo de ${url}: content-type=${contentType ?? 'ninguno'}, ` +
+            `mimeType hint=${hint.mimeType ?? 'ninguno'}, primeros bytes=${buf
+              .subarray(0, 8)
+              .toString('hex')}. WhatsApp Web rechaza los archivos sin tipo reconocible.`,
+        );
+      }
+
+      const target = this.targetPathFor(url, chosenExt);
+      await mkdir(dirname(target), { recursive: true });
       await writeFile(target, buf);
 
-      const mime = hintMime ?? contentType ?? mimeFromExtension(target);
+      const mime = mimeFromExtension(target) ?? hintMime ?? contentType;
       return {
         localPath: target,
         mime,
@@ -209,3 +248,41 @@ const MIME_TO_EXT: Record<string, string> = {
   'video/quicktime': '.mov',
   'video/webm': '.webm',
 };
+
+/**
+ * Extensión deducida de los magic bytes del propio archivo.
+ *
+ * Es la única fuente fiable: el `Content-Type` lo pone el servidor de origen y
+ * puede faltar o ser `application/octet-stream`, y las pistas de la integración
+ * pueden venir vacías. Cubre exactamente los formatos de la allow-list.
+ */
+export function sniffExtension(buf: Buffer): string | undefined {
+  const hex = (start: number, end: number) => buf.subarray(start, end).toString('hex');
+  const ascii = (start: number, end: number) => buf.subarray(start, end).toString('latin1');
+
+  if (buf.byteLength < 12) return undefined;
+  if (hex(0, 8) === '89504e470d0a1a0a') return '.png';
+  if (hex(0, 3) === 'ffd8ff') return '.jpg';
+  if (ascii(0, 3) === 'GIF') return '.gif';
+  if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return '.webp';
+  // ISO-BMFF: "....ftyp<brand>". qt = MOV; el resto de brands → mp4.
+  if (ascii(4, 8) === 'ftyp') {
+    const brand = ascii(8, 12);
+    return brand.startsWith('qt') ? '.mov' : '.mp4';
+  }
+  // WebM/Matroska.
+  if (hex(0, 4) === '1a45dfa3') return '.webm';
+  return undefined;
+}
+
+/** Primeros `n` bytes de un archivo, para sniffing. */
+async function readHead(path: string, n: number): Promise<Buffer> {
+  const fh = await open(path, 'r');
+  try {
+    const buf = Buffer.alloc(n);
+    const { bytesRead } = await fh.read(buf, 0, n, 0);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    await fh.close();
+  }
+}
