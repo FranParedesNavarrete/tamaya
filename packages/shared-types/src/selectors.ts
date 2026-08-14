@@ -254,6 +254,10 @@ export const EDITABLE_SELECTORS_DEFAULTS = {
     'input[type="file"][accept="image/*"][accept*="sticker" i]',
   ],
   mediaPreviewReady: [
+    // Anclas por data-testid del editor de media: no dependen del idioma y son
+    // específicas del preview. Verificadas contra el DOM real (2026-08-14).
+    'div[data-testid="media-editor-canvas"]',
+    'div[data-testid="media-caption-input-container"]',
     'img[alt="Preview"][src^="blob:"]',
     // El alt está traducido: en español es "Vista previa".
     'img[alt="Vista previa"][src^="blob:"]',
@@ -269,9 +273,22 @@ export const EDITABLE_SELECTORS_DEFAULTS = {
     'div[role="dialog"]:has(img[src^="blob:"])',
     'div[role="dialog"]:has(video)',
   ],
+  /**
+   * Señales de que el preview abierto es el EDITOR DE PEGATINAS y no el de
+   * foto/vídeo.
+   *
+   * CUIDADO: `[aria-label="Sticker"]` a secas ya NO sirve. La barra de
+   * herramientas del preview normal incluye un botón "Sticker"
+   * (`data-testid="sticker-button"`, aria-label="Sticker"), así que ese selector
+   * matchea en un preview de foto perfectamente correcto y daría un falso
+   * "adjuntado como pegatina". Hay que exigir señales exclusivas del modo
+   * pegatina: el recorte de contorno o un contenedor rotulado como tal.
+   */
   stickerPreviewIndicator: [
-    '[aria-label="Sticker"]',
-    '[aria-label="Pegatina"]',
+    'button[aria-label="Add outline"]',
+    'button[aria-label="Añadir contorno"]',
+    '[role="dialog"][aria-label*="sticker" i]',
+    '[role="dialog"][aria-label*="pegatina" i]',
   ],
   /**
    * Caja de caption del preview de media.
@@ -285,6 +302,17 @@ export const EDITABLE_SELECTORS_DEFAULTS = {
    * Por eso todas las variantes por placeholder excluyen el composer del canal.
    */
   captionInputOnPreview: [
+    // Ancla real, verificada contra el DOM del preview (2026-08-14): la caja de
+    // caption lleva data-testid propio y NO depende del idioma. Va primera.
+    'div[data-testid="media-caption-input-container"]',
+    // Estructural, por si quitan el testid: el contenteditable que vive en el
+    // mismo contenedor que el lienzo del editor. OJO: el preview NO es un
+    // role="dialog" (comprobado), así que no se puede scopear por ahí.
+    'div:has(div[data-testid="media-editor-canvas"]) div[contenteditable="true"][role="textbox"]',
+    // Etiquetas reales por idioma. En español es "Escribe algo" — NO "actualiza"
+    // ni "leyenda": eso lo supuse y era falso.
+    'div[contenteditable="true"][role="textbox"][aria-label="Escribe algo"]',
+    'div[contenteditable="true"][role="textbox"][aria-placeholder="Escribe algo"]',
     'div[contenteditable="true"][role="textbox"][aria-label="Type an update"]',
     'div[contenteditable="true"][role="textbox"][aria-label*="update" i]:not([aria-label^="Type a message"])',
     'div[contenteditable="true"][role="textbox"][aria-label*="actualiza" i]:not([aria-label^="Escribir un mensaje"])',
