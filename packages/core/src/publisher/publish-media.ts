@@ -182,6 +182,7 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
     // también es role=dialog y NO debe cerrarse (ver selectores blockingDialog).
     await dismissBlockingDialogs(page);
 
+    assertUsableMediaExtensions(mediaPaths);
     await attachMedia(page, mediaPaths, input.mediaKind);
     await waitForMediaPreview(page, input.mediaKind, sizeMb);
     await assertNotStickerPreview(page);
@@ -861,4 +862,33 @@ function decideResult(
   if (o.uploadPendingCleared === false) reasons.push('WhatsApp marcó fallo de subida');
   if (o.uploadPendingCleared === 'unknown') reasons.push('subida no confirmada (timeout)');
   return { result: 'ambiguous_after_send', reason: reasons.join('; ') || 'contenido no verificable tras enviar' };
+}
+
+/**
+ * Aborta antes de adjuntar si algún archivo no tiene una extensión que WA Web
+ * pueda interpretar.
+ *
+ * Playwright deriva el MIME de la extensión al hacer setInputFiles, así que un
+ * `.bin` llega como application/octet-stream y WA lo descarta EN SILENCIO: no
+ * abre preview, no da error, no pinta nada. El síntoma era un timeout de 25s en
+ * waitForMediaPreview, tres pasos más allá de la causa.
+ *
+ * No se duplica aquí la allow-list de formatos (vive en @tamaya/media-resolver,
+ * que ya rechaza los no soportados en la descarga): basta detectar la ausencia
+ * de tipo, que es lo que rompe. Los jobs resueltos ANTES de que el resolver
+ * sniffease el contenido tienen el `.bin` persistido en BD y se reutiliza en
+ * cada reintento, así que esta comprobación es la que los para con un mensaje
+ * útil en vez de dejarlos fallar en bucle.
+ */
+function assertUsableMediaExtensions(paths: string[]): void {
+  const unusable = paths.filter((p) => {
+    const ext = p.slice(p.lastIndexOf('.')).toLowerCase();
+    return !p.includes('.') || ext === '.bin' || ext === '.part';
+  });
+  if (unusable.length === 0) return;
+  throw new Error(
+    `archivos sin tipo reconocible por WhatsApp: ${unusable.join(', ')}. ` +
+      'WA los descarta sin abrir preview. Vuelve a resolver el media (crea una ' +
+      'publicación nueva): el resolver deduce ahora el tipo del contenido.',
+  );
 }

@@ -91,6 +91,7 @@ export class MediaResolver {
     this.assertSize(st.size, source);
 
     const sniffedExt = sniffExtension(await readHead(stagingPath, 16));
+    assertSupportedByWhatsApp(sniffedExt, source);
     const chosenExt = sniffedExt ?? declaredExt ?? extensionFromMime(resp.ContentType ?? '');
     if (chosenExt === undefined) {
       throw new Error(
@@ -151,6 +152,7 @@ export class MediaResolver {
           `[media-resolver] extensión declarada ${declaredExt} != contenido ${sniffedExt} (${url}); se usa el contenido`,
         );
       }
+      assertSupportedByWhatsApp(sniffedExt, url);
       const chosenExt = sniffedExt ?? declaredExt;
 
       if (chosenExt === undefined) {
@@ -265,10 +267,17 @@ export function sniffExtension(buf: Buffer): string | undefined {
   if (hex(0, 3) === 'ffd8ff') return '.jpg';
   if (ascii(0, 3) === 'GIF') return '.gif';
   if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return '.webp';
-  // ISO-BMFF: "....ftyp<brand>". qt = MOV; el resto de brands → mp4.
+  // ISO-BMFF: "....ftyp<brand>". El brand importa: AVIF y HEIC comparten el
+  // mismo contenedor que MP4, así que dar por hecho "mp4" renombraría una
+  // imagen AVIF a .mp4 — justo el tipo de tipo-equivocado que rompe el preview.
   if (ascii(4, 8) === 'ftyp') {
-    const brand = ascii(8, 12);
-    return brand.startsWith('qt') ? '.mov' : '.mp4';
+    const brand = ascii(8, 12).trim().toLowerCase();
+    if (brand.startsWith('qt')) return '.mov';
+    if (brand === 'avif' || brand === 'avis') return '.avif';
+    if (['heic', 'heix', 'hevc', 'hevx', 'mif1', 'msf1'].includes(brand)) return '.heic';
+    if (/^(isom|iso2|iso4|iso5|iso6|mp4[0-9v]|dash|avc1|m4v)/.test(brand)) return '.mp4';
+    // Brand desconocido: mejor no adivinar, que decida quien llame.
+    return undefined;
   }
   // WebM/Matroska.
   if (hex(0, 4) === '1a45dfa3') return '.webm';
@@ -285,4 +294,18 @@ async function readHead(path: string, n: number): Promise<Buffer> {
   } finally {
     await fh.close();
   }
+}
+
+/**
+ * Aborta si el contenido es un formato reconocible pero que WhatsApp Channels no
+ * acepta (AVIF, HEIC…). Renombrarlo a una extensión "parecida" solo traslada el
+ * fallo al publisher, que se queda esperando un preview que no va a existir.
+ */
+function assertSupportedByWhatsApp(sniffedExt: string | undefined, source: string): void {
+  if (sniffedExt === undefined) return;
+  if (EXT_TO_MIME[sniffedExt] !== undefined) return;
+  throw new Error(
+    `el contenido de ${source} es ${sniffedExt} y WhatsApp Channels no lo acepta ` +
+      `(formatos válidos: ${Object.keys(EXT_TO_MIME).join(', ')}). Convierte el archivo en origen.`,
+  );
 }
