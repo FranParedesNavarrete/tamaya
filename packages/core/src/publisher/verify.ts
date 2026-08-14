@@ -118,16 +118,9 @@ export async function detectMediaInLastItems(page: Page, n = 4): Promise<boolean
     const total = await bubbles.count().catch(() => 0);
     if (total === 0) return 'unknown';
     const from = Math.max(0, total - n);
-    const mediaSel = [
-      'img[src^="blob:"]',
-      'img[src*="/media/"]',
-      'video',
-      'canvas',
-      'div[style*="blob:"]',
-      'a[href*="/media/"]',
-      'span[data-icon="media-download"]',
-      'span[data-icon="audio-play"]',
-    ].join(', ');
+    // Lista editable desde la UI (ver comentario de threadMediaIndicator: la
+    // anterior estaba hardcodeada aquí y contenía selectores muertos).
+    const mediaSel = SELECTORS.threadMediaIndicator.join(', ');
     for (let i = from; i < total; i++) {
       const cnt = await bubbles.nth(i).locator(mediaSel).count().catch(() => 0);
       if (cnt > 0) return true;

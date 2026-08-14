@@ -380,6 +380,42 @@ export const EDITABLE_SELECTORS_DEFAULTS = {
     'div[data-pre-plain-text]:last-of-type',
     'div.message-out:last-of-type',
   ],
+  /**
+   * Señales de que una burbuja del hilo contiene MEDIA (no solo texto).
+   *
+   * Verificado contra dump real con fotos publicadas (2026-08-14):
+   * - `img[src*="/media/"]` daba 0 hits y era dead code: las imágenes servidas
+   *   por WhatsApp vienen de `media-mad1-1.cdn.whatsapp.net/v/t61…`, donde no
+   *   hay ningún `/media/` entre barras. Por eso `mediaDetected` salía false en
+   *   publicaciones que SÍ tenían imagen.
+   * - `image-thumb` y `media-url-provider` aciertan en el 100% de las burbujas
+   *   con foto y no dependen del idioma.
+   *
+   * DOS FALSOS POSITIVOS QUE HAY QUE EVITAR:
+   * - `img[src^="data:image"]`: los emojis del hilo son sprites data:image/gif,
+   *   así que cualquier mensaje con un emoji contaría como media.
+   * - `img[src*="whatsapp.net"]` a secas: las fotos de perfil son
+   *   `pps.whatsapp.net` y en grupos aparecen DENTRO de la fila del mensaje.
+   *   Por eso se exige `cdn.whatsapp.net`, que es solo media.
+   */
+  threadMediaIndicator: [
+    '[data-testid="image-thumb"]',
+    '[data-testid="media-url-provider"]',
+    'img[src^="blob:"]',
+    'img[src*="cdn.whatsapp.net"]',
+    'video',
+    'canvas',
+    'div[style*="blob:"]',
+    'span[data-icon="media-download"]',
+    'span[data-icon="audio-play"]',
+    // Fallbacks por idioma, al final: en español la burbuja de foto expone
+    // aria-label="Abrir foto". Redundantes con image-thumb, pero inofensivos
+    // (solo aparecen en burbujas con media) y cubren que Meta quite el testid.
+    'div[aria-label="Abrir foto"]',
+    'div[aria-label="Open photo"]',
+    'div[aria-label="Abrir vídeo"]',
+    'div[aria-label="Open video"]',
+  ],
   messageText: [
     'span[data-testid="selectable-text"]',
     'span.selectable-text[dir="ltr"]',

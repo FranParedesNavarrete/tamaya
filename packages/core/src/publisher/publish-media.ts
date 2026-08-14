@@ -199,6 +199,7 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
     // Verificar que el Send está realmente clickable antes de pulsarlo.
     await waitForSendButtonReady(page);
     const threadMarkersBeforeSend = await countThreadMarkers(page);
+    const indicatorsBeforeSend = await countIndicators(page);
 
     // ---- PUNTO DE NO RETORNO: a partir de aquí, el contenido puede haberse
     // publicado, así que un fallo NO debe reintentarse automáticamente. ----
@@ -210,6 +211,7 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
       sizeMb,
       body: input.body,
       threadMarkersBeforeSend,
+      indicatorsBeforeSend,
     });
 
     const { result, reason } = decideResult(expected, observed);
@@ -232,11 +234,21 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
       try { debugDump = await dumpDebugInfo(page0, 'publish-media-verify'); } catch { /* logged */ }
     }
     logger.warn({ result, reason, observed }, 'publishMedia post-send verification not confirmed');
+    // Las señales van EN el mensaje de error, no solo en el log: es lo único que
+    // se ve desde la UI, y sin ellas "no se pudo verificar" no dice qué falló.
+    const signals = [
+      `previewClosed=${observed.previewClosed}`,
+      `indicador=${observed.indicatorAppeared}`,
+      `itemEnHilo=${observed.threadItemAppeared}`,
+      `texto=${observed.textMatched}`,
+      `media=${observed.mediaDetected}`,
+      `uploadPendiente=${observed.uploadPendingCleared}`,
+    ].join(' ');
     return {
       success: false,
       durationMs: Date.now() - started,
       mediaSha256,
-      error: reason ?? 'post-send verification failed',
+      error: `${reason ?? 'post-send verification failed'} | señales: ${signals}`,
       debugDump,
       verificationMeta,
       postSendMaybeDelivered: true,
@@ -462,21 +474,69 @@ async function waitForVideoReady(page: Page, sizeMb: number): Promise<void> {
   const timeout = scaledTimeout(TIMEOUTS.videoReady, sizeMb);
   logger.info({ sizeMb: sizeMb.toFixed(2), timeoutMs: timeout }, 'waiting for video metadata');
   try {
+    // La condición era `video[src^="blob:"]` con readyState y duration. Demasiado
+    // estrecha: si WA usa MediaSource, srcObject o un <source> hijo, el atributo
+    // src no empieza por blob: y la comprobación no encuentra NADA — se agotaba
+    // el timeout completo y se seguía adelante igual. Ahora se acepta cualquier
+    // <video> que tenga metadata (readyState) o duración conocida.
     await page.waitForFunction(
       `(() => {
-        const v = document.querySelector('video[src^="blob:"]');
-        return !!v && v.readyState >= 1 && !isNaN(v.duration) && v.duration > 0;
+        const vids = Array.from(document.querySelectorAll('video'));
+        return vids.some((v) => v.readyState >= 1 || (isFinite(v.duration) && v.duration > 0));
       })()`,
       undefined,
       { timeout },
     );
     logger.info('video metadata loaded');
+    return;
   } catch (err) {
+    const inventory = await videoInventory(page);
+
+    // Sin ningún <video> en el DOM tras el timeout escalado, la conclusión es
+    // firme: WA no ha procesado el archivo y no hay nada que enviar. Abortamos
+    // ANTES de pulsar Enviar, que es la única situación recuperable: un fallo
+    // aquí se reintenta solo, mientras que pulsar Enviar a ciegas deja el job en
+    // ambiguous_after_send y obliga a revisar el canal a mano.
+    if (inventory.length === 0) {
+      throw new Error(
+        `el preview no contiene ningún <video> tras ${timeout}ms (${sizeMb.toFixed(1)} MB): ` +
+          'WhatsApp no ha procesado el archivo. Abortado antes de pulsar Enviar.',
+      );
+    }
+
+    // Hay vídeo pero no confirma metadata: no es concluyente (puede que WA no
+    // exponga readyState), así que seguimos como antes, pero dejando en el log
+    // el estado real de cada elemento para poder diagnosticarlo.
     logger.warn(
-      { err: err instanceof Error ? err.message : String(err), timeoutMs: timeout },
+      { err: err instanceof Error ? err.message : String(err), timeoutMs: timeout, inventory },
       'video metadata not confirmed — continuing anyway',
     );
   }
+}
+
+/**
+ * Estado de los <video> del DOM: por qué no se confirma la metadata.
+ *
+ * readyState 0 = HAVE_NOTHING (WA aún no ha decodificado nada). duration NaN
+ * significa lo mismo. Sin estos datos, "video metadata not confirmed" no dice si
+ * el vídeo no existe, no ha cargado o simplemente no expone readyState.
+ */
+async function videoInventory(
+  page: Page,
+): Promise<Array<{ srcPrefix: string; readyState: number; duration: number; inEditor: boolean }>> {
+  const raw = await page
+    .evaluate(
+      `Array.from(document.querySelectorAll('video')).map((v) => ({
+         srcPrefix: String(v.currentSrc || v.src || '').slice(0, 12),
+         readyState: v.readyState,
+         duration: Number.isFinite(v.duration) ? v.duration : -1,
+         inEditor: !!v.closest('[data-testid="media-editor-canvas"]'),
+       }))`,
+    )
+    .catch(() => []);
+  return Array.isArray(raw)
+    ? (raw as Array<{ srcPrefix: string; readyState: number; duration: number; inEditor: boolean }>)
+    : [];
 }
 
 /**
@@ -732,9 +792,15 @@ const FAILED_INNER = [
  */
 async function verifyAfterSend(
   page: Page,
-  opts: { kind: MediaKind; sizeMb: number; body?: string; threadMarkersBeforeSend: number },
+  opts: {
+    kind: MediaKind;
+    sizeMb: number;
+    body?: string;
+    threadMarkersBeforeSend: number;
+    indicatorsBeforeSend: number;
+  },
 ): Promise<VerificationObserved> {
-  const { kind, sizeMb, body, threadMarkersBeforeSend } = opts;
+  const { kind, sizeMb, body, threadMarkersBeforeSend, indicatorsBeforeSend } = opts;
   const total = scaledTimeout(TIMEOUTS[kind].upload, sizeMb);
   const startedAt = Date.now();
   const overallDeadline = startedAt + total;
@@ -750,9 +816,18 @@ async function verifyAfterSend(
   };
 
   // 1) El preview debe cerrarse (WA aceptó el envío localmente).
+  //
+  // OJO: esto usaba 'img[alt="Preview"], video[src^="blob:"]', y era una señal
+  // INÚTIL con la UI en español: el alt es "Vista previa", así que el selector no
+  // matcheaba nada y `state: 'detached'` se cumple de inmediato cuando no hay
+  // ningún elemento — previewClosed salía true aunque el preview siguiera
+  // abierto. Se ancla a los data-testid del editor, que no dependen del idioma.
+  const previewOpenSelector =
+    'div[data-testid="media-editor-canvas"], div[data-testid="media-caption-input-container"], ' +
+    'img[alt="Preview"][src^="blob:"], img[alt="Vista previa"][src^="blob:"], video[src^="blob:"]';
   const previewBudget = Math.max(60_000, Math.floor(total * 0.4));
   try {
-    await page.waitForSelector('img[alt="Preview"], video[src^="blob:"]', {
+    await page.waitForSelector(previewOpenSelector, {
       state: 'detached',
       timeout: Math.min(previewBudget, overallDeadline - Date.now()),
     });
@@ -768,7 +843,11 @@ async function verifyAfterSend(
   const failedSelector = (await scopedSelectors(page, FAILED_INNER)).join(', ');
   const indicatorDeadline = Date.now() + 15_000;
   while (Date.now() < indicatorDeadline) {
-    if ((await page.locator(indicatorSelector).count().catch(() => 0)) > 0) {
+    // Comparado contra la línea base de ANTES de enviar. Antes bastaba con que
+    // hubiera algún tick en el hilo (`> 0`), y en un canal con publicaciones
+    // previas eso es cierto siempre: `indicatorAppeared` salía true sin haber
+    // enviado nada. Ahora tiene que aparecer uno NUEVO.
+    if ((await page.locator(indicatorSelector).count().catch(() => 0)) > indicatorsBeforeSend) {
       observed.indicatorAppeared = true;
       break;
     }
@@ -786,8 +865,12 @@ async function verifyAfterSend(
   // 3) Verificación de CONTENIDO real (independiente de los ticks).
   if (body && body.length > 0) {
     const texts = await findLastThreadTexts(page, 5);
-    const pageText = await findPageVisibleText(page);
-    observed.textMatched = textMatchesAny(body, [...texts, pageText]);
+    // findPageVisibleText barre TODO el body y además cada title/alt/aria-label.
+    // Eso incluye la propia caja de caption del preview, así que si el preview
+    // sigue abierto el caption se "encuentra" sin haberse publicado nada. Solo
+    // se usa como fallback cuando consta que el preview se cerró.
+    const extra = observed.previewClosed ? [await findPageVisibleText(page)] : [];
+    observed.textMatched = textMatchesAny(body, [...texts, ...extra]);
   } else {
     observed.textMatched = 'unknown';
   }
@@ -836,6 +919,18 @@ function decideResult(
   const textOk = !expected.hasText || o.textMatched === true;
   const mediaOk = !expected.hasMedia || o.mediaDetected === true;
   const expectedContentVerified = textOk && mediaOk;
+
+  // Si el preview sigue ABIERTO, WA no aceptó el envío: no hay nada publicado.
+  // Es un fallo limpio y reintentable, no una ambigüedad — y distinguirlo evita
+  // dejar el job en "revisa el canal a mano" cuando sí sabemos qué pasó.
+  // (Esta rama no hacía nada antes: previewClosed salía true siempre por el bug
+  // del selector 'img[alt="Preview"]', que no matcheaba con la UI en español.)
+  if (o.previewClosed === false && !o.threadItemAppeared) {
+    return {
+      result: 'verification_failed',
+      reason: 'el preview del media siguió abierto tras pulsar Enviar: WhatsApp no aceptó el envío',
+    };
+  }
 
   // Fallo explícito de WA y sin evidencia de contenido correcto → no se publicó, retryable.
   if (o.uploadPendingCleared === false && !deliveredEvidence && !expectedContentVerified) {
@@ -891,4 +986,10 @@ function assertUsableMediaExtensions(paths: string[]): void {
       'WA los descarta sin abrir preview. Vuelve a resolver el media (crea una ' +
       'publicación nueva): el resolver deduce ahora el tipo del contenido.',
   );
+}
+
+/** Nº de indicadores (ticks) en el hilo. Línea base para exigir uno NUEVO. */
+async function countIndicators(page: Page): Promise<number> {
+  const selector = (await scopedSelectors(page, INDICATOR_INNER)).join(', ');
+  return page.locator(selector).count().catch(() => 0);
 }
