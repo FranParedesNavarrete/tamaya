@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { api } from '../api/client';
-import type { Channel } from '@tamaya/shared-types';
+import { api, ApiError } from '../api/client';
+import type { Channel, InsightsCaptureResponse } from '@tamaya/shared-types';
 import { Button } from '../components/ui/button';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '../components/ui/table';
 import { AlertDialog, ConfirmDialog } from '../components/ui/alert-dialog';
 import { format } from 'date-fns';
+import { BarChart3, Loader2 } from 'lucide-react';
 
 interface ConfirmState {
   title: string;
@@ -24,6 +25,8 @@ export function ChannelsList() {
   const [loading, setLoading] = useState(true);
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [refreshingAll, setRefreshingAll] = useState(false);
+  const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
 
   async function load() {
     setChannels(await api.listChannels());
@@ -51,12 +54,45 @@ export function ChannelsList() {
     });
   }
 
+  async function onRefreshAll() {
+    setRefreshingAll(true);
+    setRefreshSummary(null);
+    try {
+      const r: InsightsCaptureResponse = await api.refreshAllChannelInsights();
+      const okCount = r.results.filter((x) => x.ok).length;
+      const failCount = r.results.length - okCount;
+      setRefreshSummary(
+        r.ok
+          ? `${okCount}/${r.results.length} canales actualizados` + (failCount > 0 ? ` — ${failCount} con error` : '')
+          : (r.error ?? 'No se pudo actualizar ningún canal'),
+      );
+    } catch (e) {
+      setRefreshSummary(e instanceof ApiError ? e.message : (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setRefreshingAll(false);
+    }
+  }
+
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <div className="flex justify-between items-center mb-4">
         <h1 className="text-2xl font-bold">Canales</h1>
-        <Button asChild><Link to="/channels/new">+ Nuevo canal</Link></Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={onRefreshAll} disabled={refreshingAll}>
+            {refreshingAll ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <BarChart3 className="h-4 w-4 mr-1" />}
+            Actualizar todas las estadísticas
+          </Button>
+          <Button asChild><Link to="/channels/new">+ Nuevo canal</Link></Button>
+        </div>
       </div>
+      {refreshingAll && (
+        <p className="text-xs text-muted-foreground mb-3">
+          Puede tardar varios minutos si hay muchos canales (abre WhatsApp Web y navega canal a canal) — no cierres esta pestaña.
+        </p>
+      )}
+      {refreshSummary && (
+        <p className="text-sm mb-3 rounded-md border bg-muted/50 px-3 py-2">{refreshSummary}</p>
+      )}
       {loading ? <p>Cargando…</p> : channels.length === 0 ? (
         <p className="text-muted-foreground">
           No hay canales aún. <Link to="/channels/new" className="underline">Crea el primero</Link>.
@@ -75,13 +111,17 @@ export function ChannelsList() {
           </TableHeader>
           <TableBody>
             {channels.map((c) => (
-              <TableRow key={c.id}>
+              <TableRow
+                key={c.id}
+                className="cursor-pointer hover:bg-muted/50"
+                onClick={() => nav(`/channels/${c.id}`)}
+              >
                 <TableCell className="font-mono">{c.acronym ?? '—'}</TableCell>
                 <TableCell className="font-medium">{c.name}</TableCell>
                 <TableCell className="max-w-xs truncate">{c.description ?? '—'}</TableCell>
                 <TableCell>{format(new Date(c.createdAt), 'dd/MM/yy HH:mm')}</TableCell>
                 <TableCell>{format(new Date(c.updatedAt), 'dd/MM/yy HH:mm')}</TableCell>
-                <TableCell className="text-right space-x-2">
+                <TableCell className="text-right space-x-2" onClick={(e) => e.stopPropagation()}>
                   <Button size="sm" variant="outline"
                           onClick={() => nav(`/channels/${c.id}/edit`)}>
                     Editar

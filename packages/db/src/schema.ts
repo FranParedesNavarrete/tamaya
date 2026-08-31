@@ -8,6 +8,7 @@ import {
   mysqlEnum,
   index,
 } from 'drizzle-orm/mysql-core';
+import type { ChannelInsights } from '@tamaya/shared-types';
 
 // ---------- channels ----------
 export const channels = mysqlTable('channels', {
@@ -89,6 +90,22 @@ export const auditLog = mysqlTable('audit_log', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => ({
   tenantCreatedIdx: index('tenant_created_idx').on(t.tenantId, t.createdAt),
+}));
+
+// ---------- channel_insights_snapshots ----------
+// Foto de las Estadísticas de un canal (Alcance/Crecimiento/Seguidores) en un
+// momento dado. Un blob JSON por snapshot (igual que jobs.media) — no hay
+// necesidad de filtrar SQL dentro del JSON hoy, solo de listar por canal y
+// fecha. Lo produce packages/core (Playwright) vía control-server; lo lee
+// apps/api tal cual.
+export const channelInsightsSnapshots = mysqlTable('channel_insights_snapshots', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  tenantId: varchar('tenant_id', { length: 64 }).notNull(),
+  channelId: varchar('channel_id', { length: 36 }).notNull(),
+  capturedAt: timestamp('captured_at').notNull().defaultNow(),
+  data: json('data').$type<ChannelInsights>().notNull(),
+}, (t) => ({
+  channelCapturedIdx: index('channel_captured_idx').on(t.channelId, t.capturedAt),
 }));
 
 // ---------- app_settings ----------

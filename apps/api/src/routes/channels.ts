@@ -2,9 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull } from 'drizzle-orm';
 import { getDb, schema } from '@tamaya/db';
 import { CreateChannelSchema, UpdateChannelSchema } from '@tamaya/shared-types';
+import { captureAllChannelInsights, captureChannelInsightsById } from '../insights-capture.js';
 
 export async function channelsRoutes(app: FastifyInstance) {
   const a = app.withTypeProvider<ZodTypeProvider>();
@@ -79,5 +80,52 @@ export async function channelsRoutes(app: FastifyInstance) {
       .set({ deletedAt: new Date() })
       .where(eq(schema.channels.id, req.params.id));
     return { id: req.params.id, deleted: true };
+  });
+
+  // ---------- Estadísticas de canal ----------
+
+  // POST /channels/insights/refresh-all — captura TODOS los canales activos.
+  // Proxy fino a control-server (Playwright nativo): un solo contexto de
+  // Chromium recorre todos los canales en la misma sesión. Puede tardar
+  // minutos con muchos canales — sin polling en esta primera iteración.
+  a.post('/insights/refresh-all', async (_req, reply) => {
+    const { status, body } = await captureAllChannelInsights();
+    return reply.code(status).send(body);
+  });
+
+  // POST /channels/:id/insights/refresh — captura solo este canal.
+  a.post('/:id/insights/refresh', {
+    schema: { params: z.object({ id: z.string().uuid() }) },
+  }, async (req, reply) => {
+    const rows = await db.select().from(schema.channels)
+      .where(eq(schema.channels.id, req.params.id)).limit(1);
+    if (rows.length === 0 || rows[0].deletedAt) return reply.code(404).send({ error: 'not found' });
+    const { status, body } = await captureChannelInsightsById(req.params.id);
+    return reply.code(status).send(body);
+  });
+
+  // GET /channels/:id/insights — último snapshot capturado (o 404 si aún no hay ninguno).
+  a.get('/:id/insights', {
+    schema: { params: z.object({ id: z.string().uuid() }) },
+  }, async (req, reply) => {
+    const rows = await db.select().from(schema.channelInsightsSnapshots)
+      .where(eq(schema.channelInsightsSnapshots.channelId, req.params.id))
+      .orderBy(desc(schema.channelInsightsSnapshots.capturedAt))
+      .limit(1);
+    if (rows.length === 0) return reply.code(404).send({ error: 'sin estadísticas capturadas aún' });
+    return rows[0];
+  });
+
+  // GET /channels/:id/insights/history — histórico de snapshots (para evolución en el tiempo).
+  a.get('/:id/insights/history', {
+    schema: {
+      params: z.object({ id: z.string().uuid() }),
+      querystring: z.object({ limit: z.coerce.number().int().min(1).max(200).default(30) }),
+    },
+  }, async (req) => {
+    return db.select().from(schema.channelInsightsSnapshots)
+      .where(eq(schema.channelInsightsSnapshots.channelId, req.params.id))
+      .orderBy(desc(schema.channelInsightsSnapshots.capturedAt))
+      .limit(req.query.limit);
   });
 }

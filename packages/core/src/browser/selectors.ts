@@ -102,4 +102,4 @@ export function resetSelectorsToDefaults(): void {
 // Reexport útil para consumidores que quieran los defaults sin overrides.
 export { EDITABLE_SELECTORS_DEFAULTS };
 
-export const SELECTORS_VERSION = '0.5.0';
+export const SELECTORS_VERSION = '0.6.0';

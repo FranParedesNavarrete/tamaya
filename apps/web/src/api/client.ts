@@ -1,6 +1,7 @@
 import type {
   CreateJobInput, Job,
   Channel, CreateChannelInput, UpdateChannelInput,
+  ChannelInsights, InsightsAutoCaptureConfig, InsightsCaptureResponse,
 } from '@tamaya/shared-types';
 
 // VITE_API_BASE_URL se inyecta en build a partir de APP_URL:API_PORT en
@@ -185,6 +186,14 @@ export interface OpsRestartPublisher {
   error?: string;
 }
 
+export interface ChannelInsightsSnapshot {
+  id: string;
+  tenantId: string;
+  channelId: string;
+  capturedAt: string;
+  data: ChannelInsights;
+}
+
 export interface JobSearchParams extends StatsRange {
   status?: string;
   q?: string;
@@ -240,6 +249,25 @@ export const api = {
     }),
   deleteChannel: (id: string) =>
     req<{ id: string; deleted: boolean }>(`/channels/${id}`, { method: 'DELETE' }),
+
+  // Estadísticas de canal
+  getChannelInsights: (id: string) =>
+    req<ChannelInsightsSnapshot>(`/channels/${id}/insights`),
+  getChannelInsightsHistory: (id: string, limit?: number) =>
+    req<ChannelInsightsSnapshot[]>(`/channels/${id}/insights/history${toQuery({ limit })}`),
+  refreshChannelInsights: (id: string) =>
+    req<InsightsCaptureResponse>(`/channels/${id}/insights/refresh`, { method: 'POST' }),
+  refreshAllChannelInsights: () =>
+    req<InsightsCaptureResponse>('/channels/insights/refresh-all', { method: 'POST' }),
+
+  // Ajustes — captura automática de estadísticas
+  getInsightsAutoCapture: () =>
+    req<InsightsAutoCaptureConfig>('/settings/insights-capture'),
+  putInsightsAutoCapture: (cfg: Omit<InsightsAutoCaptureConfig, 'lastRunDate'>) =>
+    req<InsightsAutoCaptureConfig>('/settings/insights-capture', {
+      method: 'PUT',
+      body: JSON.stringify(cfg),
+    }),
 
   // Media
   uploadMedia: async (file: File): Promise<UploadedMedia> => {

@@ -33,7 +33,7 @@ export interface ControlResponse {
 export async function controlFetch(
   method: 'GET' | 'POST',
   path: string,
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; body?: unknown } = {},
 ): Promise<ControlResponse> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
@@ -44,6 +44,7 @@ export async function controlFetch(
       method,
       headers,
       signal: controller.signal,
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
     const text = await res.text();
     let body: unknown = null;

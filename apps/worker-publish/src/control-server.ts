@@ -21,11 +21,12 @@ import { fileURLToPath } from 'node:url';
 // Carga .env del repo raíz — 3 niveles arriba desde dist/control-server.js o src/.
 loadEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../../.env') });
 
-import { createServer, type ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import pino from 'pino';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { getDb, schema } from '@tamaya/db';
 import {
   launchPersistentContextForTenant,
@@ -34,8 +35,13 @@ import {
   applySelectorOverrides,
   SELECTORS,
   config,
+  waitForAppReady,
+  dismissBlockingDialogs,
+  captureInsightsOnPage,
+  ProfileLockedError,
 } from '@tamaya/core';
 import type { BrowserContext, Page } from 'playwright';
+import type { InsightsCaptureResultItem } from '@tamaya/shared-types';
 import { startHeartbeat } from './heartbeat.js';
 
 const logger = pino({
@@ -221,6 +227,91 @@ async function loadSelectorOverrides(): Promise<void> {
   }
 }
 
+/** Lee y parsea el body JSON de una request (vacío ⇒ `{}`). */
+async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk) => { data += chunk; });
+    req.on('end', () => {
+      if (!data.trim()) return resolve({});
+      try {
+        resolve(JSON.parse(data));
+      } catch (err) {
+        reject(err);
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+/**
+ * Captura las Estadísticas de uno o varios canales.
+ *
+ * `channelId` presente → solo ese canal. Ausente → todos los canales activos
+ * del tenant, dentro de UN SOLO contexto de Chromium: se navega canal a canal
+ * en la misma sesión (igual que un humano), en vez de abrir/cerrar el
+ * navegador una vez por canal. Un fallo en un canal no aborta el resto.
+ *
+ * Lanza `ProfileLockedError` si `worker-publish` tiene el perfil (publicando);
+ * el llamador la traduce a un error claro, igual que ya pasa con el login.
+ */
+async function captureInsights(
+  channelId?: string,
+): Promise<{ status: number; ok: boolean; results: InsightsCaptureResultItem[]; error?: string }> {
+  const db = getDb();
+  const conditions = channelId
+    ? and(eq(schema.channels.id, channelId), isNull(schema.channels.deletedAt))
+    : and(eq(schema.channels.tenantId, config.tenantId), isNull(schema.channels.deletedAt));
+  const channels = await db.select().from(schema.channels).where(conditions);
+
+  if (channels.length === 0) {
+    return {
+      status: 404,
+      ok: false,
+      results: [],
+      error: channelId ? 'canal no encontrado' : 'no hay canales activos',
+    };
+  }
+  if (!sessionExists()) {
+    return { status: 503, ok: false, results: [], error: 'no hay sesión de WhatsApp — vincula primero' };
+  }
+
+  const results: InsightsCaptureResultItem[] = [];
+  const context = await launchPersistentContextForTenant('control-server');
+  try {
+    const page = context.pages()[0] ?? (await context.newPage());
+    await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded' });
+    await waitForAppReady(page, { timeout: 60_000 });
+    await dismissBlockingDialogs(page);
+
+    for (const ch of channels) {
+      try {
+        const insights = await captureInsightsOnPage(page, {
+          name: ch.name,
+          inviteLink: ch.inviteLink ?? undefined,
+          whatsappId: ch.whatsappId ?? undefined,
+        });
+        await db.insert(schema.channelInsightsSnapshots).values({
+          id: randomUUID(),
+          tenantId: ch.tenantId,
+          channelId: ch.id,
+          data: insights,
+        });
+        results.push({ channelId: ch.id, channelName: ch.name, ok: true });
+        logger.info({ channelId: ch.id, channel: ch.name }, 'channel insights captured and stored');
+      } catch (err) {
+        const message = errMsg(err);
+        results.push({ channelId: ch.id, channelName: ch.name, ok: false, error: message });
+        logger.warn({ channelId: ch.id, channel: ch.name, err: message }, 'channel insights capture failed');
+      }
+    }
+  } finally {
+    await context.close();
+  }
+
+  return { status: 200, ok: true, results };
+}
+
 function json(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
@@ -260,6 +351,26 @@ const server = createServer((req, res) => {
       if (method === 'POST' && path === '/publisher/restart') {
         const r = await restartPublisher();
         return json(res, r.ok ? 200 : 500, r);
+      }
+      if (method === 'POST' && path === '/insights/capture') {
+        let body: Record<string, unknown> = {};
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return json(res, 400, { ok: false, results: [], error: 'body JSON inválido' });
+        }
+        const channelId = typeof body.channelId === 'string' && body.channelId.length > 0
+          ? body.channelId
+          : undefined;
+        try {
+          const r = await captureInsights(channelId);
+          return json(res, r.status, r);
+        } catch (err) {
+          if (err instanceof ProfileLockedError) {
+            return json(res, 409, { ok: false, results: [], error: errMsg(err) });
+          }
+          throw err;
+        }
       }
       return json(res, 404, { error: 'not found' });
     } catch (err) {

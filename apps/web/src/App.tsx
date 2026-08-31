@@ -6,6 +6,7 @@ import { JobsList } from './pages/JobsList';
 import { NewJob } from './pages/NewJob';
 import { ChannelsList } from './pages/ChannelsList';
 import { ChannelForm } from './pages/ChannelForm';
+import { ChannelShow } from './pages/ChannelShow';
 import { Settings } from './pages/Settings';
 import { EmbedWidget } from './pages/EmbedWidget';
 import { ThemeToggle } from './components/theme-toggle';
@@ -77,6 +78,7 @@ export default function App() {
           <Route path="/channels" element={<ChannelsList />} />
           <Route path="/channels/new" element={<ChannelForm />} />
           <Route path="/channels/:id/edit" element={<ChannelForm />} />
+          <Route path="/channels/:id" element={<ChannelShow />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/embed" element={<EmbedWidget />} />
           <Route path="/embed/:widget" element={<EmbedWidget />} />

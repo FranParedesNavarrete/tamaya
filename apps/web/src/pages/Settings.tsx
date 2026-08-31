@@ -12,6 +12,7 @@ import { ConfirmDialog, AlertDialog } from '../components/ui/alert-dialog';
 import { WhatsAppSection } from '../components/settings/WhatsAppSection';
 import { SelectorsSection } from '../components/settings/SelectorsSection';
 import { OpsSection } from '../components/settings/OpsSection';
+import { InsightsCaptureSection } from '../components/settings/InsightsCaptureSection';
 import {
   KeyRound, Copy, Check, Trash2, ShieldCheck, ShieldAlert, LayoutTemplate,
 } from 'lucide-react';
@@ -201,6 +202,9 @@ export function Settings() {
       {/* ---------- WhatsApp (Iteración 2) ---------- */}
       <WhatsAppSection />
       </section>
+
+      {/* ---------- Captura automática de estadísticas de canal ---------- */}
+      <InsightsCaptureSection />
 
       {/* ---------- Selectores editables (Iteración 2) ---------- */}
       <SelectorsSection />

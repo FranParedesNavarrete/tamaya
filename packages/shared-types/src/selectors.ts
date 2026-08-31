@@ -41,6 +41,20 @@ import { z } from 'zod';
  *   `Canal <nombre>`); el idioma NO era la causa de los fallos.
  * - Selectores de Estadísticas del canal (`insights*`) para la lectura de
  *   métricas; ver `metrics/channel-insights.ts`.
+ *
+ * Cambios de 2026-08-31 (verificado contra dumps reales en español; navegación
+ * hasta el drawer de Estadísticas — antes solo se sabía leerlo ya abierto):
+ * - `channelMenuButton` / `channelMenuInfoButton`: menú de los 3 puntos del
+ *   canal → "Info. del canal". El aria-label en inglés es una suposición (sin
+ *   dump en ese idioma); por eso `channelMenuInfoButton` lleva también un
+ *   fallback por icono (`ic-info`, único entre los items de ese menú).
+ * - `channelInfoInsightsSeeAllButton`: botón "Ver todo" dentro de la sección
+ *   de estadísticas del panel de info. Ancla por `data-testid`, estable e
+ *   independiente del idioma.
+ * - `insightsGrowthLegendItem` / `insightsValueWithDelta` / `insightsDeltaCell`:
+ *   lectura de las pestañas Crecimiento y Seguidores (antes solo se leía
+ *   Alcance). `insightsValueWithDelta`/`insightsDeltaCell` reutilizan el mismo
+ *   `data-testid="value"` que ya usaban las barras de Alcance para el valor.
  */
 export const EDITABLE_SELECTORS_DEFAULTS = {
   // --- App lifecycle ---
@@ -163,6 +177,39 @@ export const EDITABLE_SELECTORS_DEFAULTS = {
     'span[aria-label$="seguidor"]',
     'span[aria-label$="followers"]',
     'span[aria-label$="follower"]',
+  ],
+
+  // --- Menú del canal (3 puntos) → navegación a Estadísticas ---
+  // Botón que abre el menú contextual del canal (arriba a la derecha del header).
+  //
+  // CUIDADO: hay VARIOS botones "Menú"/"Menu" en la página a la vez (panel
+  // lateral de canales, etc.) — verificado 2026-08-31 con Playwright contra
+  // sesión real: 3 candidatos con aria-label="Menu", solo uno dentro de
+  // `header[data-testid="conversation-header"]` (el del canal abierto).
+  // `waitForAny` corre todos los selectores EN PARALELO (Promise.any), así que
+  // un selector sin scope puede ganar la carrera con el botón equivocado — por
+  // eso van todos anclados al header del canal abierto, no sueltos.
+  // Nota también: el aria-label del BOTÓN se observó en inglés ("Menu") en una
+  // sesión cuyo contenido (items del menú) está en español — WA Web no
+  // localiza siempre igual el control que el contenido.
+  channelMenuButton: [
+    'header[data-testid="conversation-header"] button[aria-label="Menú"]',
+    'header[data-testid="conversation-header"] button[aria-label="Menu"]',
+    'header[data-testid="conversation-header"] button:has(svg > title:text-is("ic-more-vert"))',
+  ],
+  // Item "Info. del canal" dentro de ese menú. El aria-label en inglés es una
+  // suposición (sin dump en ese idioma) — el fallback por icono ic-info es
+  // único entre los items del menú (Ajustes/Seleccionar/Cerrar/Reportar usan
+  // otros iconos), así que sirve de red de seguridad real, no solo cosmética.
+  channelMenuInfoButton: [
+    'button[role="menuitem"][aria-label="Info. del canal"]',
+    'button[role="menuitem"][aria-label="Channel info"]',
+    'button[role="menuitem"]:has(svg > title:text-is("ic-info"))',
+  ],
+  // Botón "Ver todo" de la sección de estadísticas dentro del panel de Info
+  // del canal. Testid estable e independiente del idioma — verificado 2026-08-31.
+  channelInfoInsightsSeeAllButton: [
+    '[data-testid="channel-admin-insights-insights-section-see-all-button"]',
   ],
 
   // --- Composer ---
@@ -370,6 +417,17 @@ export const EDITABLE_SELECTORS_DEFAULTS = {
   insightsBarLabel: ['div[data-testid="label"]'],
   insightsBarValue: ['div[data-testid="value"]'],
   insightsBarPercent: ['div[data-testid="percentage"]'],
+  // Pestaña Crecimiento: 3 filas (netos nuevos / nuevos / bajas), cada una con
+  // icono+etiqueta y, en un div hermano, el valor. Sin testid propio para el
+  // valor — se lee por posición dentro de cada fila (ver channel-insights.ts).
+  insightsGrowthLegendItem: [
+    'div[data-testid^="newsletter-admin-insights-timeline-widget-legend-item-"]',
+  ],
+  // Pestaña Seguidores: total + variación ("value-with-delta"). El valor
+  // reutiliza el mismo testid "value" que las barras de Alcance
+  // (insightsBarValue); "delta" es nuevo aquí.
+  insightsValueWithDelta: ['div[data-testid="value-with-delta"]'],
+  insightsDeltaCell: ['div[data-testid="delta"]'],
 
   // --- Mensajes en el hilo ---
   lastMessageBubble: [

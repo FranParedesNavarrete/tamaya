@@ -10,6 +10,7 @@ import { settingsRoutes } from './routes/settings.js';
 import { opsRoutes } from './routes/ops.js';
 import { registerAuth } from './auth.js';
 import { closeQueue } from './queue/bullmq.js';
+import { startInsightsScheduler } from './insights-scheduler.js';
 
 async function main() {
   const app = Fastify({
@@ -47,8 +48,11 @@ async function main() {
   const port = Number(process.env.API_PORT ?? 3001);
   await app.listen({ port, host: '0.0.0.0' });
 
+  const stopInsightsScheduler = startInsightsScheduler();
+
   const shutdown = async () => {
     app.log.info('shutting down');
+    stopInsightsScheduler();
     await closeQueue();
     await app.close();
     process.exit(0);

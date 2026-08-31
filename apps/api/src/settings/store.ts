@@ -1,7 +1,11 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { getDb, getPool, schema } from '@tamaya/db';
-import type { SelectorOverrides } from '@tamaya/shared-types';
+import {
+  DEFAULT_INSIGHTS_AUTO_CAPTURE_CONFIG,
+  type InsightsAutoCaptureConfig,
+  type SelectorOverrides,
+} from '@tamaya/shared-types';
 
 /**
  * Acceso al almacén clave/valor `app_settings`.
@@ -14,6 +18,7 @@ import type { SelectorOverrides } from '@tamaya/shared-types';
 
 export const API_TOKEN_HASH_KEY = 'security.apiTokenHash';
 export const SELECTOR_OVERRIDES_KEY = 'selectors.overrides';
+export const INSIGHTS_AUTO_CAPTURE_KEY = 'insights.autoCapture';
 const TOKEN_PREFIX = 'tamaya_';
 
 /** Lee un valor de settings; null si no existe. */
@@ -57,6 +62,26 @@ export async function getSelectorOverrides(): Promise<SelectorOverrides> {
 /** Persiste los overrides de selectores como JSON. */
 export async function setSelectorOverrides(overrides: SelectorOverrides): Promise<void> {
   await setSetting(SELECTOR_OVERRIDES_KEY, JSON.stringify(overrides));
+}
+
+/**
+ * Configuración de captura automática de estadísticas de canal. Devuelve los
+ * defaults (deshabilitada) si no hay nada guardado o el JSON es inválido.
+ */
+export async function getInsightsAutoCaptureConfig(): Promise<InsightsAutoCaptureConfig> {
+  const raw = await getSetting(INSIGHTS_AUTO_CAPTURE_KEY);
+  if (!raw) return { ...DEFAULT_INSIGHTS_AUTO_CAPTURE_CONFIG };
+  try {
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_INSIGHTS_AUTO_CAPTURE_CONFIG, ...parsed };
+  } catch {
+    return { ...DEFAULT_INSIGHTS_AUTO_CAPTURE_CONFIG };
+  }
+}
+
+/** Persiste la configuración de captura automática como JSON. */
+export async function setInsightsAutoCaptureConfig(cfg: InsightsAutoCaptureConfig): Promise<void> {
+  await setSetting(INSIGHTS_AUTO_CAPTURE_KEY, JSON.stringify(cfg));
 }
 
 /** SHA-256 en hex del texto dado. */

@@ -5,6 +5,7 @@ import {
   EDITABLE_SELECTOR_KEYS,
   NON_EDITABLE_SELECTOR_KEYS,
   SelectorOverridesSchema,
+  InsightsAutoCaptureConfigSchema,
   type EditableSelectorKey,
   type SelectorOverrides,
 } from '@tamaya/shared-types';
@@ -15,6 +16,8 @@ import {
   setSelectorOverrides,
   deleteSetting,
   SELECTOR_OVERRIDES_KEY,
+  getInsightsAutoCaptureConfig,
+  setInsightsAutoCaptureConfig,
 } from '../settings/store.js';
 import { controlFetch, ControlUnavailableError } from '../control-client.js';
 
@@ -132,5 +135,21 @@ export async function settingsRoutes(app: FastifyInstance) {
       effective: effectiveSelectors({}),
       note: 'Reinicia worker-publish / control-server para que los cambios surtan efecto.',
     };
+  });
+
+  // ---------- Captura automática de estadísticas de canal ----------
+  // `lastRunDate` es contabilidad interna del scheduler (insights-scheduler.ts)
+  // — no se acepta desde el cliente, solo se devuelve para diagnóstico.
+  const InsightsAutoCaptureInputSchema = InsightsAutoCaptureConfigSchema.omit({ lastRunDate: true });
+
+  a.get('/insights-capture', async () => getInsightsAutoCaptureConfig());
+
+  a.put('/insights-capture', {
+    schema: { body: InsightsAutoCaptureInputSchema },
+  }, async (req) => {
+    const current = await getInsightsAutoCaptureConfig();
+    const next = { ...current, ...req.body };
+    await setInsightsAutoCaptureConfig(next);
+    return next;
   });
 }

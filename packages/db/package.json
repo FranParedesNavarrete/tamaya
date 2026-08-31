@@ -17,6 +17,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@tamaya/shared-types": "*",
     "drizzle-orm": "^0.36.0",
     "mysql2": "^3.11.0"
   },
