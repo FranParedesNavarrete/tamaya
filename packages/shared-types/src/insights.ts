@@ -110,3 +110,22 @@ export const InsightsCaptureResponseSchema = z.object({
   error: z.string().optional(),
 });
 export type InsightsCaptureResponse = z.infer<typeof InsightsCaptureResponseSchema>;
+
+/**
+ * Estado de la captura de TODOS los canales, hecha en segundo plano en
+ * control-server (un solo contexto de Chromium, canal a canal). La UI hace
+ * polling de este estado en vez de esperar en una única petición HTTP larga
+ * — una captura de muchos canales puede tardar minutos, y cualquier corte de
+ * conexión a mitad de camino (deploy, reinicio del proceso, etc.) no debe
+ * dejar a la UI con un error opaco: solo hace falta volver a preguntar.
+ */
+export const InsightsCaptureAllStatusSchema = z.object({
+  status: z.enum(['idle', 'running', 'done', 'error']),
+  total: z.number().int(),
+  processed: z.number().int(),
+  results: z.array(InsightsCaptureResultItemSchema),
+  startedAt: z.string().nullable(),
+  finishedAt: z.string().nullable(),
+  error: z.string().nullable(),
+});
+export type InsightsCaptureAllStatus = z.infer<typeof InsightsCaptureAllStatusSchema>;

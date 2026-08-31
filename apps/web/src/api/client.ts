@@ -1,7 +1,7 @@
 import type {
   CreateJobInput, Job,
   Channel, CreateChannelInput, UpdateChannelInput,
-  ChannelInsights, InsightsAutoCaptureConfig, InsightsCaptureResponse,
+  ChannelInsights, InsightsAutoCaptureConfig, InsightsCaptureResponse, InsightsCaptureAllStatus,
 } from '@tamaya/shared-types';
 
 // VITE_API_BASE_URL se inyecta en build a partir de APP_URL:API_PORT en
@@ -267,8 +267,12 @@ export const api = {
     req<ChannelInsightsSnapshot[]>(`/channels/${id}/insights/history${toQuery({ limit })}`),
   refreshChannelInsights: (id: string) =>
     req<InsightsCaptureResponse>(`/channels/${id}/insights/refresh`, { method: 'POST' }),
+  // Dispara la captura de todos los canales (control-server responde al
+  // instante, 'running' — el trabajo real sigue en segundo plano).
   refreshAllChannelInsights: () =>
-    req<InsightsCaptureResponse>('/channels/insights/refresh-all', { method: 'POST' }),
+    req<InsightsCaptureAllStatus>('/channels/insights/refresh-all', { method: 'POST' }),
+  getInsightsRefreshAllStatus: () =>
+    req<InsightsCaptureAllStatus>('/channels/insights/refresh-all/status'),
 
   // Ajustes — captura automática de estadísticas
   getInsightsAutoCapture: () =>

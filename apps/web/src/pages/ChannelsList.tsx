@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, ApiError, isInsightsNotAvailableYet } from '../api/client';
-import type { Channel, InsightsCaptureResponse } from '@tamaya/shared-types';
+import type { Channel, InsightsCaptureAllStatus } from '@tamaya/shared-types';
 import { Button } from '../components/ui/button';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -27,13 +27,69 @@ export function ChannelsList() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [refreshingAll, setRefreshingAll] = useState(false);
   const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function load() {
     setChannels(await api.listChannels());
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    // Si ya hay una captura en curso (p.ej. la disparó otra pestaña, o esta
+    // se recargó a mitad de camino) retoma el polling en vez de dejar el
+    // botón inactivo sin explicación.
+    (async () => {
+      try {
+        const state = await api.getInsightsRefreshAllStatus();
+        if (state.status === 'running') startPolling();
+      } catch {
+        /* sin estado previo — no pasa nada */
+      }
+    })();
+    return () => stopPolling();
+  }, []);
+
+  function stopPolling() {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }
+
+  function summarizeState(state: InsightsCaptureAllStatus): string {
+    if (state.status === 'running') {
+      return `Actualizando… ${state.processed}/${state.total || '?'} canales procesados`;
+    }
+    if (state.status === 'error' && state.results.length === 0) {
+      return state.error ?? 'No se pudo actualizar ningún canal';
+    }
+    const okCount = state.results.filter((x) => x.ok).length;
+    const notYetCount = state.results.filter((x) => !x.ok && isInsightsNotAvailableYet(x.error)).length;
+    const failCount = state.results.length - okCount - notYetCount;
+    return `${okCount}/${state.results.length} canales actualizados`
+      + (notYetCount > 0 ? ` — ${notYetCount} sin datos suficientes aún (canal con pocos seguidores)` : '')
+      + (failCount > 0 ? ` — ${failCount} con error` : '');
+  }
+
+  function startPolling() {
+    setRefreshingAll(true);
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const state = await api.getInsightsRefreshAllStatus();
+        setRefreshSummary(summarizeState(state));
+        if (state.status !== 'running') {
+          stopPolling();
+          setRefreshingAll(false);
+        }
+      } catch (e) {
+        // Un fallo puntual de red no debe parar el polling (puede ser el
+        // propio deploy que estamos vigilando) — se reintenta en el próximo tick.
+        setRefreshSummary(e instanceof ApiError ? e.message : (e instanceof Error ? e.message : String(e)));
+      }
+    }, 2500);
+  }
 
   function onDelete(ch: Channel) {
     setConfirmState({
@@ -55,24 +111,13 @@ export function ChannelsList() {
   }
 
   async function onRefreshAll() {
-    setRefreshingAll(true);
     setRefreshSummary(null);
     try {
-      const r: InsightsCaptureResponse = await api.refreshAllChannelInsights();
-      const okCount = r.results.filter((x) => x.ok).length;
-      const notYetCount = r.results.filter((x) => !x.ok && isInsightsNotAvailableYet(x.error)).length;
-      const failCount = r.results.length - okCount - notYetCount;
-      setRefreshSummary(
-        r.ok
-          ? `${okCount}/${r.results.length} canales actualizados`
-            + (notYetCount > 0 ? ` — ${notYetCount} sin datos suficientes aún (canal con pocos seguidores)` : '')
-            + (failCount > 0 ? ` — ${failCount} con error` : '')
-          : (r.error ?? 'No se pudo actualizar ningún canal'),
-      );
+      const state = await api.refreshAllChannelInsights();
+      setRefreshSummary(summarizeState(state));
+      if (state.status === 'running') startPolling();
     } catch (e) {
       setRefreshSummary(e instanceof ApiError ? e.message : (e instanceof Error ? e.message : String(e)));
-    } finally {
-      setRefreshingAll(false);
     }
   }
 

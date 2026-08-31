@@ -41,7 +41,7 @@ import {
   ProfileLockedError,
 } from '@tamaya/core';
 import type { BrowserContext, Page } from 'playwright';
-import type { InsightsCaptureResultItem } from '@tamaya/shared-types';
+import type { InsightsCaptureAllStatus, InsightsCaptureResultItem } from '@tamaya/shared-types';
 import { startHeartbeat } from './heartbeat.js';
 
 const logger = pino({
@@ -244,72 +244,161 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   });
 }
 
+type ChannelRow = typeof schema.channels.$inferSelect;
+
 /**
- * Captura las Estadísticas de uno o varios canales.
- *
- * `channelId` presente → solo ese canal. Ausente → todos los canales activos
- * del tenant, dentro de UN SOLO contexto de Chromium: se navega canal a canal
- * en la misma sesión (igual que un humano), en vez de abrir/cerrar el
- * navegador una vez por canal. Un fallo en un canal no aborta el resto.
- *
+ * Captura las Estadísticas de UN canal y las guarda. Nunca lanza — un fallo
+ * (selector roto, canal sin datos suficientes, etc.) se devuelve como
+ * `{ok:false, error}` para que el llamador siga con el siguiente canal.
+ */
+async function captureOneChannel(
+  db: ReturnType<typeof getDb>,
+  page: Page,
+  ch: ChannelRow,
+): Promise<InsightsCaptureResultItem> {
+  try {
+    const insights = await captureInsightsOnPage(page, {
+      name: ch.name,
+      inviteLink: ch.inviteLink ?? undefined,
+      whatsappId: ch.whatsappId ?? undefined,
+    });
+    await db.insert(schema.channelInsightsSnapshots).values({
+      id: randomUUID(),
+      tenantId: ch.tenantId,
+      channelId: ch.id,
+      data: insights,
+    });
+    logger.info({ channelId: ch.id, channel: ch.name }, 'channel insights captured and stored');
+    return { channelId: ch.id, channelName: ch.name, ok: true };
+  } catch (err) {
+    const message = errMsg(err);
+    logger.warn({ channelId: ch.id, channel: ch.name, err: message }, 'channel insights capture failed');
+    return { channelId: ch.id, channelName: ch.name, ok: false, error: message };
+  }
+}
+
+/**
+ * Captura las Estadísticas de UN canal (síncrono: es rápido, un solo canal).
  * Lanza `ProfileLockedError` si `worker-publish` tiene el perfil (publicando);
  * el llamador la traduce a un error claro, igual que ya pasa con el login.
+ *
+ * Rechaza si `runCaptureAll` está en curso: ambos abrirían Chromium contra el
+ * mismo `userDataDir` DESDE EL MISMO PROCESO, así que el lock de perfil (que
+ * solo distingue por pid/owner) no los separa — sin esta guarda, coincidir en
+ * el tiempo podría lanzar dos navegadores a la vez sobre el mismo perfil.
  */
-async function captureInsights(
-  channelId?: string,
+async function captureSingleChannel(
+  channelId: string,
 ): Promise<{ status: number; ok: boolean; results: InsightsCaptureResultItem[]; error?: string }> {
-  const db = getDb();
-  const conditions = channelId
-    ? and(eq(schema.channels.id, channelId), isNull(schema.channels.deletedAt))
-    : and(eq(schema.channels.tenantId, config.tenantId), isNull(schema.channels.deletedAt));
-  const channels = await db.select().from(schema.channels).where(conditions);
-
-  if (channels.length === 0) {
+  if (captureAllState.status === 'running') {
     return {
-      status: 404,
+      status: 409,
       ok: false,
       results: [],
-      error: channelId ? 'canal no encontrado' : 'no hay canales activos',
+      error: 'hay una captura de todos los canales en curso — espera a que termine e inténtalo de nuevo',
     };
+  }
+
+  const db = getDb();
+  const rows = await db.select().from(schema.channels)
+    .where(and(eq(schema.channels.id, channelId), isNull(schema.channels.deletedAt)));
+
+  if (rows.length === 0) {
+    return { status: 404, ok: false, results: [], error: 'canal no encontrado' };
   }
   if (!sessionExists()) {
     return { status: 503, ok: false, results: [], error: 'no hay sesión de WhatsApp — vincula primero' };
   }
 
-  const results: InsightsCaptureResultItem[] = [];
   const context = await launchPersistentContextForTenant('control-server');
   try {
     const page = context.pages()[0] ?? (await context.newPage());
     await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded' });
     await waitForAppReady(page, { timeout: 60_000 });
     await dismissBlockingDialogs(page);
-
-    for (const ch of channels) {
-      try {
-        const insights = await captureInsightsOnPage(page, {
-          name: ch.name,
-          inviteLink: ch.inviteLink ?? undefined,
-          whatsappId: ch.whatsappId ?? undefined,
-        });
-        await db.insert(schema.channelInsightsSnapshots).values({
-          id: randomUUID(),
-          tenantId: ch.tenantId,
-          channelId: ch.id,
-          data: insights,
-        });
-        results.push({ channelId: ch.id, channelName: ch.name, ok: true });
-        logger.info({ channelId: ch.id, channel: ch.name }, 'channel insights captured and stored');
-      } catch (err) {
-        const message = errMsg(err);
-        results.push({ channelId: ch.id, channelName: ch.name, ok: false, error: message });
-        logger.warn({ channelId: ch.id, channel: ch.name, err: message }, 'channel insights capture failed');
-      }
-    }
+    const result = await captureOneChannel(db, page, rows[0]);
+    return { status: 200, ok: true, results: [result] };
   } finally {
     await context.close();
   }
+}
 
-  return { status: 200, ok: true, results };
+/**
+ * Captura TODOS los canales activos, EN SEGUNDO PLANO (no bloquea la
+ * request que la dispara — ver `startCaptureAllIfIdle`).
+ *
+ * Un solo contexto de Chromium recorre los canales secuencialmente (igual que
+ * un humano), en vez de abrir/cerrar el navegador una vez por canal. Un fallo
+ * en un canal no aborta el resto — sí lo hace un fallo al ABRIR el navegador
+ * (p.ej. `ProfileLockedError` si worker-publish está publicando), que deja
+ * `captureAllState` en 'error'.
+ *
+ * Es intencionadamente asíncrona y sin await desde el caller: capturar muchos
+ * canales puede tardar minutos, y una única petición HTTP tan larga es frágil
+ * ante cualquier corte de conexión a mitad de camino (deploy, reinicio del
+ * proceso por la razón que sea) — con polling, un corte solo obliga a volver
+ * a preguntar el estado, no pierde el trabajo ya hecho (cada canal se guarda
+ * en cuanto se captura).
+ */
+async function runCaptureAll(): Promise<void> {
+  const db = getDb();
+  try {
+    const channels = await db.select().from(schema.channels)
+      .where(and(eq(schema.channels.tenantId, config.tenantId), isNull(schema.channels.deletedAt)));
+    captureAllState.total = channels.length;
+
+    if (channels.length === 0) {
+      captureAllState.status = 'error';
+      captureAllState.error = 'no hay canales activos';
+      captureAllState.finishedAt = new Date().toISOString();
+      return;
+    }
+    if (!sessionExists()) {
+      captureAllState.status = 'error';
+      captureAllState.error = 'no hay sesión de WhatsApp — vincula primero';
+      captureAllState.finishedAt = new Date().toISOString();
+      return;
+    }
+
+    const context = await launchPersistentContextForTenant('control-server');
+    try {
+      const page = context.pages()[0] ?? (await context.newPage());
+      await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded' });
+      await waitForAppReady(page, { timeout: 60_000 });
+      await dismissBlockingDialogs(page);
+
+      for (const ch of channels) {
+        const result = await captureOneChannel(db, page, ch);
+        captureAllState.results.push(result);
+        captureAllState.processed += 1;
+      }
+    } finally {
+      await context.close();
+    }
+    captureAllState.status = 'done';
+    captureAllState.finishedAt = new Date().toISOString();
+  } catch (err) {
+    const message = errMsg(err);
+    captureAllState.status = 'error';
+    captureAllState.error = message;
+    captureAllState.finishedAt = new Date().toISOString();
+    logger.error({ err: message }, 'runCaptureAll failed');
+  }
+}
+
+let captureAllState: InsightsCaptureAllStatus = {
+  status: 'idle', total: 0, processed: 0, results: [], startedAt: null, finishedAt: null, error: null,
+};
+
+/** Arranca `runCaptureAll` si no hay una captura en curso; devuelve el estado (idempotente). */
+function startCaptureAllIfIdle(): InsightsCaptureAllStatus {
+  if (captureAllState.status === 'running') return captureAllState;
+  captureAllState = {
+    status: 'running', total: 0, processed: 0, results: [],
+    startedAt: new Date().toISOString(), finishedAt: null, error: null,
+  };
+  void runCaptureAll();
+  return captureAllState;
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -362,15 +451,27 @@ const server = createServer((req, res) => {
         const channelId = typeof body.channelId === 'string' && body.channelId.length > 0
           ? body.channelId
           : undefined;
-        try {
-          const r = await captureInsights(channelId);
-          return json(res, r.status, r);
-        } catch (err) {
-          if (err instanceof ProfileLockedError) {
-            return json(res, 409, { ok: false, results: [], error: errMsg(err) });
+
+        // Un canal: síncrono, es rápido (segundos).
+        if (channelId) {
+          try {
+            const r = await captureSingleChannel(channelId);
+            return json(res, r.status, r);
+          } catch (err) {
+            if (err instanceof ProfileLockedError) {
+              return json(res, 409, { ok: false, results: [], error: errMsg(err) });
+            }
+            throw err;
           }
-          throw err;
         }
+
+        // Todos los canales: se lanza en segundo plano y se responde al
+        // instante — ver runCaptureAll(). La UI hace polling a /insights/capture/status.
+        const state = startCaptureAllIfIdle();
+        return json(res, 202, state);
+      }
+      if (method === 'GET' && path === '/insights/capture/status') {
+        return json(res, 200, captureAllState);
       }
       return json(res, 404, { error: 'not found' });
     } catch (err) {

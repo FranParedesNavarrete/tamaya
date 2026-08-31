@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { getDb, schema } from '@tamaya/db';
 import { CreateChannelSchema, UpdateChannelSchema } from '@tamaya/shared-types';
-import { captureAllChannelInsights, captureChannelInsightsById } from '../insights-capture.js';
+import { captureAllChannelInsights, captureChannelInsightsById, getCaptureAllStatus } from '../insights-capture.js';
 
 export async function channelsRoutes(app: FastifyInstance) {
   const a = app.withTypeProvider<ZodTypeProvider>();
@@ -88,8 +88,16 @@ export async function channelsRoutes(app: FastifyInstance) {
   // Proxy fino a control-server (Playwright nativo): un solo contexto de
   // Chromium recorre todos los canales en la misma sesión. Puede tardar
   // minutos con muchos canales — sin polling en esta primera iteración.
+  // Dispara la captura de todos los canales; control-server la corre en
+  // segundo plano y responde al instante (202 + estado 'running').
   a.post('/insights/refresh-all', async (_req, reply) => {
     const { status, body } = await captureAllChannelInsights();
+    return reply.code(status).send(body);
+  });
+
+  // GET /channels/insights/refresh-all/status — progreso de la captura en curso (o de la última).
+  a.get('/insights/refresh-all/status', async (_req, reply) => {
+    const { status, body } = await getCaptureAllStatus();
     return reply.code(status).send(body);
   });
 
