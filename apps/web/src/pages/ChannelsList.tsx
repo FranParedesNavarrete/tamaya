@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { api, ApiError } from '../api/client';
+import { api, ApiError, isInsightsNotAvailableYet } from '../api/client';
 import type { Channel, InsightsCaptureResponse } from '@tamaya/shared-types';
 import { Button } from '../components/ui/button';
 import {
@@ -60,10 +60,13 @@ export function ChannelsList() {
     try {
       const r: InsightsCaptureResponse = await api.refreshAllChannelInsights();
       const okCount = r.results.filter((x) => x.ok).length;
-      const failCount = r.results.length - okCount;
+      const notYetCount = r.results.filter((x) => !x.ok && isInsightsNotAvailableYet(x.error)).length;
+      const failCount = r.results.length - okCount - notYetCount;
       setRefreshSummary(
         r.ok
-          ? `${okCount}/${r.results.length} canales actualizados` + (failCount > 0 ? ` — ${failCount} con error` : '')
+          ? `${okCount}/${r.results.length} canales actualizados`
+            + (notYetCount > 0 ? ` — ${notYetCount} sin datos suficientes aún (canal con pocos seguidores)` : '')
+            + (failCount > 0 ? ` — ${failCount} con error` : '')
           : (r.error ?? 'No se pudo actualizar ningún canal'),
       );
     } catch (e) {

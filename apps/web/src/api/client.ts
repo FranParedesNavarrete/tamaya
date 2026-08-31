@@ -8,6 +8,16 @@ import type {
 // docker-compose.yml. Fallback a localhost para dev fuera de Docker.
 const BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
 
+// Prefijo con el que `@tamaya/core` marca el error cuando WhatsApp oculta el
+// panel completo de Estadísticas por no llegar el canal al mínimo de
+// seguidores exigido (ver packages/core/src/publisher/capture-insights.ts).
+// No es un fallo real — la UI lo muestra como aviso, no como error.
+const INSIGHTS_NOT_AVAILABLE_PREFIX = 'INSIGHTS_NOT_AVAILABLE_YET';
+
+export function isInsightsNotAvailableYet(error?: string | null): boolean {
+  return !!error && error.startsWith(INSIGHTS_NOT_AVAILABLE_PREFIX);
+}
+
 // Clave del token de API en localStorage. La UI lo guarda tras generarlo en
 // Ajustes y lo envía en cada petición como `Authorization: Bearer <token>`.
 export const API_TOKEN_STORAGE_KEY = 'tamaya_api_token';

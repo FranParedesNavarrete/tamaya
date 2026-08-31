@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { format } from 'date-fns';
 import {
-  ArrowLeft, BarChart3, Loader2, RefreshCw, TrendingUp, TrendingDown, Users,
+  ArrowLeft, BarChart3, Info, Loader2, RefreshCw, TrendingUp, TrendingDown, Users,
 } from 'lucide-react';
-import { api, ApiError, type ChannelInsightsSnapshot } from '../api/client';
+import { api, ApiError, isInsightsNotAvailableYet, type ChannelInsightsSnapshot } from '../api/client';
 import type { Channel } from '@tamaya/shared-types';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
@@ -45,6 +45,10 @@ function BarRows({ rows }: { rows: { label: string; value: { raw: string }; perc
   );
 }
 
+const INSIGHTS_NOT_AVAILABLE_MESSAGE =
+  'Este canal todavía no tiene suficientes seguidores para que WhatsApp muestre el panel completo ' +
+  'de Estadísticas (exige un mínimo, normalmente 100). Vuelve a intentarlo cuando el canal crezca.';
+
 export function ChannelShow() {
   const { id } = useParams<{ id: string }>();
   const nav = useNavigate();
@@ -53,6 +57,7 @@ export function ChannelShow() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [noSnapshot, setNoSnapshot] = useState(false);
 
   const load = useCallback(async () => {
@@ -88,13 +93,16 @@ export function ChannelShow() {
     if (!id) return;
     setRefreshing(true);
     setError(null);
+    setNotice(null);
     try {
       const r = await api.refreshChannelInsights(id);
       const item = r.results[0];
-      if (!r.ok || (item && !item.ok)) {
-        setError(item?.error ?? r.error ?? 'No se pudo actualizar');
-      }
       await load();
+      if (!r.ok || (item && !item.ok)) {
+        const raw = item?.error ?? r.error ?? 'No se pudo actualizar';
+        if (isInsightsNotAvailableYet(raw)) setNotice(INSIGHTS_NOT_AVAILABLE_MESSAGE);
+        else setError(raw);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -138,12 +146,19 @@ export function ChannelShow() {
         </div>
       )}
 
+      {notice && !error && !noSnapshot && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-700 dark:text-amber-400 flex gap-2">
+          <Info className="h-4 w-4 mt-0.5 shrink-0" />
+          <span>{notice}</span>
+        </div>
+      )}
+
       {noSnapshot && !insights && (
         <Card>
           <CardContent className="py-10 flex flex-col items-center gap-3 text-center">
             <BarChart3 className="h-8 w-8 text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
-              Aún no se han capturado estadísticas de este canal.
+              {notice ?? 'Aún no se han capturado estadísticas de este canal.'}
             </p>
             <Button onClick={onRefresh} disabled={refreshing}>
               {refreshing ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
