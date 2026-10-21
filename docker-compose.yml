@@ -153,6 +153,16 @@ services:
     depends_on:
       - api
 
+# Subnet fija de la red del compose. Así la regla de firewall del host que deja
+# a la API llegar al control server nativo no se rompe al recrear la red:
+#   ufw allow from 10.128.0.0/24 to any port 3210 proto tcp
+# Si choca con otra red, cambia TAMAYA_DOCKER_SUBNET (y la regla ufw).
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${TAMAYA_DOCKER_SUBNET:-10.128.0.0/24}
+
 volumes:
   tamaya-mysql:
   tamaya-redis:
