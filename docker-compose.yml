@@ -50,6 +50,14 @@ services:
       retries: 10
 
   api:
+    networks:
+      # gw_priority: la salida por defecto va por la red propia (10.127.0.0/24)
+      # y no por redis_default, que gana por orden alfabético. Si no, las
+      # peticiones al control server (host.docker.internal:3210) salen desde
+      # 172.28.x y la regla ufw de la subred no las deja pasar.
+      default:
+        gw_priority: 1
+      redis_default: {}
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -92,6 +100,14 @@ services:
     # por .env. Si usas infra local, COMPOSE_PROFILES=local-infra levanta mysql/redis.
 
   worker-resolve:
+    networks:
+      # gw_priority: la salida por defecto va por la red propia (10.127.0.0/24)
+      # y no por redis_default, que gana por orden alfabético. Si no, las
+      # peticiones al control server (host.docker.internal:3210) salen desde
+      # 172.28.x y la regla ufw de la subred no las deja pasar.
+      default:
+        gw_priority: 1
+      redis_default: {}
     build:
       context: .
       dockerfile: apps/worker-resolve/Dockerfile
@@ -155,13 +171,19 @@ services:
 
 # Subnet fija de la red del compose. Así la regla de firewall del host que deja
 # a la API llegar al control server nativo no se rompe al recrear la red:
-#   ufw allow from 10.128.0.0/24 to any port 3210 proto tcp
+#   ufw allow from 10.127.0.0/24 to any port 3210 proto tcp
+# Va fuera del pool automático de Docker del servidor (10.128.0.0/9, en
+# /etc/docker/daemon.json): 10.128.0.0/24 es la de docker0 y la red no se
+# llega a crear ("Pool overlaps with other one on this address space").
 # Si choca con otra red, cambia TAMAYA_DOCKER_SUBNET (y la regla ufw).
 networks:
   default:
     ipam:
       config:
-        - subnet: ${TAMAYA_DOCKER_SUBNET:-10.128.0.0/24}
+        - subnet: ${TAMAYA_DOCKER_SUBNET:-10.127.0.0/24}
+  # Red del stack de redis (redis_server). La usan api y worker-resolve.
+  redis_default:
+    external: true
 
 volumes:
   tamaya-mysql:
