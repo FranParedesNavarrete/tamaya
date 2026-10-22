@@ -8,6 +8,7 @@ import { Label } from '../components/ui/label';
 import {
   Card, CardHeader, CardTitle, CardDescription, CardContent,
 } from '../components/ui/card';
+import { copyText } from '../lib/clipboard';
 import { ConfirmDialog, AlertDialog } from '../components/ui/alert-dialog';
 import { WhatsAppSection } from '../components/settings/WhatsAppSection';
 import { SelectorsSection } from '../components/settings/SelectorsSection';
@@ -63,12 +64,11 @@ export function Settings() {
 
   async function copyToken() {
     if (!generatedToken) return;
-    try {
-      await navigator.clipboard.writeText(generatedToken);
+    if (await copyText(generatedToken)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setError('No se pudo copiar al portapapeles.');
+    } else {
+      setError('No se pudo copiar al portapapeles. Selecciona el token y cópialo a mano.');
     }
   }
 
@@ -243,7 +243,7 @@ function EmbedsSection({ token }: { token: string | null }) {
   const [copiedEmbed, setCopiedEmbed] = useState<string | null>(null);
 
   async function copyEmbed(name: string, iframe: string) {
-    await navigator.clipboard.writeText(iframe);
+    if (!(await copyText(iframe))) return;
     setCopiedEmbed(name);
     setTimeout(() => setCopiedEmbed(null), 1800);
   }
@@ -311,13 +311,15 @@ function DocsSection({ token, configured, onRotate }: {
 }) {
   const docsUrl = `${BASE.replace(/\/$/, '')}/docs`;
   const [copied, setCopied] = useState<'url' | 'token' | null>(null);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const [reveal, setReveal] = useState(false);
 
   async function copy(what: 'url' | 'token', value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(what);
-      setTimeout(() => setCopied(null), 1800);
-    } catch { /* sin permiso de portapapeles: no hacemos nada */ }
+    const ok = await copyText(value);
+    setCopyFailed(!ok);
+    if (!ok) return;
+    setCopied(what);
+    setTimeout(() => setCopied(null), 1800);
   }
 
   return (
@@ -367,10 +369,26 @@ function DocsSection({ token, configured, onRotate }: {
               {configured ? 'Rotar token' : 'Generar token'}
             </Button>
           </div>
+          {token && (
+            <div className="flex items-center gap-2">
+              <code className="flex-1 break-all rounded bg-muted px-2 py-1.5 text-xs">
+                {reveal ? token : `${token.slice(0, 7)}${'•'.repeat(12)}${token.slice(-4)}`}
+              </code>
+              <Button size="sm" variant="ghost" onClick={() => setReveal((v) => !v)}>
+                {reveal ? 'Ocultar' : 'Mostrar'}
+              </Button>
+            </div>
+          )}
+          {copyFailed && (
+            <p className="text-xs text-red-600">
+              El navegador no permite copiar aquí (la página no usa HTTPS). Pulsa «Mostrar»
+              y copia el texto a mano.
+            </p>
+          )}
           <p className="text-xs text-muted-foreground">
             {token
-              ? 'Se copia el token guardado en este navegador.'
-              : 'No hay token guardado en este navegador: genera uno nuevo o pega uno existente en «Seguridad API».'}
+              ? 'Es el token guardado en este navegador.'
+              : 'Este navegador no tiene token guardado y el servidor solo conserva su hash, así que no se puede recuperar: rota el token para generar uno nuevo, o pega uno existente en «Seguridad API».'}
           </p>
         </div>
       </CardContent>
