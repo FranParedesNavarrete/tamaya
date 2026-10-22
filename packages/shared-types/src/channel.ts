@@ -6,6 +6,7 @@ export const CreateChannelSchema = z.object({
   description: z.string().optional(),
   inviteLink: z.string().url().optional(),
   whatsappId: z.string().optional(),
+  projectId: z.string().optional(),
 });
 
 export const UpdateChannelSchema = CreateChannelSchema.partial();
@@ -18,6 +19,7 @@ export const ChannelSchema = z.object({
   description: z.string().nullable(),
   inviteLink: z.string().nullable(),
   whatsappId: z.string().nullable(),
+  projectId: z.string().nullable(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   deletedAt: z.string().datetime().nullable(),

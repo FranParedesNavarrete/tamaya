@@ -13,6 +13,7 @@ import type { ChannelInsights } from '@tamaya/shared-types';
 // ---------- channels ----------
 export const channels = mysqlTable('channels', {
   id: varchar('id', { length: 36 }).primaryKey(),
+  projectId: varchar('project_id', { length: 128 }),
   tenantId: varchar('tenant_id', { length: 64 }).notNull(),
   acronym: varchar('acronym', { length: 16 }),
   name: varchar('name', { length: 255 }).notNull(),

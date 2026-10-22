@@ -15,6 +15,7 @@ export function ChannelForm() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [inviteLink, setInviteLink] = useState('');
+  const [projectId, setProjectId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(isEdit);
@@ -28,6 +29,7 @@ export function ChannelForm() {
         setName(ch.name);
         setDescription(ch.description ?? '');
         setInviteLink(ch.inviteLink ?? '');
+        setProjectId(ch.projectId ?? '');
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e));
       } finally {
@@ -45,6 +47,7 @@ export function ChannelForm() {
       name,
       description: description || undefined,
       inviteLink: inviteLink || undefined,
+      projectId: projectId || undefined,
     };
     try {
       if (isEdit && id) {
@@ -90,6 +93,12 @@ export function ChannelForm() {
         <Label>Invite link (opcional)</Label>
         <Input type="url" value={inviteLink} onChange={e => setInviteLink(e.target.value)}
                placeholder="https://whatsapp.com/channel/..." />
+      </div>
+
+      <div>
+        <Label>Proyecto (opcional)</Label>
+        <Input value={projectId} onChange={e => setProjectId(e.target.value)}
+               maxLength={128} placeholder="ID de proyecto" />
       </div>
 
       {err && <p className="text-destructive">{err}</p>}

@@ -43,6 +43,7 @@ export async function channelsRoutes(app: FastifyInstance) {
       description: req.body.description ?? null,
       inviteLink: req.body.inviteLink ?? null,
       whatsappId: req.body.whatsappId ?? null,
+      projectId: req.body.projectId ?? null,
     });
     return { id };
   });
@@ -64,6 +65,7 @@ export async function channelsRoutes(app: FastifyInstance) {
       ...(req.body.description !== undefined && { description: req.body.description }),
       ...(req.body.inviteLink !== undefined && { inviteLink: req.body.inviteLink }),
       ...(req.body.whatsappId !== undefined && { whatsappId: req.body.whatsappId }),
+      ...(req.body.projectId !== undefined && { projectId: req.body.projectId }),
     }).where(eq(schema.channels.id, req.params.id));
     return { id: req.params.id };
   });
