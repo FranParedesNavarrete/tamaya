@@ -1,7 +1,9 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
-import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
+import swagger from '@fastify/swagger';
+import swaggerUi from '@fastify/swagger-ui';
+import { jsonSchemaTransform, serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { jobsRoutes } from './routes/jobs.js';
 import { channelsRoutes } from './routes/channels.js';
 import { mediaRoutes } from './routes/media.js';
@@ -32,8 +34,30 @@ async function main() {
     limits: { fileSize: 100 * 1024 * 1024 },   // 100 MB
   });
 
+  // Documentación OpenAPI en /docs (Swagger UI). Debe registrarse antes que las
+  // rutas para que @fastify/swagger las recoja. Las rutas sin schema aparecen
+  // igualmente (método + path) agrupadas por su prefijo.
+  await app.register(swagger, {
+    openapi: {
+      info: { title: 'Tamaya API', version: '0.4.0', description: 'API de programación y publicación en canales de WhatsApp.' },
+      components: { securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer' } } },
+      security: [{ bearerAuth: [] }],
+    },
+    transform: (args) => {
+      // Rutas sin `schema` llegan con schema undefined: les damos uno mínimo con tag.
+      const out = jsonSchemaTransform({ ...args, schema: args.schema ?? {} });
+      const schema = out.schema as { tags?: string[] };
+      if (!schema.tags) schema.tags = [args.url.split('/')[1] || 'general'];
+      return out;
+    },
+  });
+  await app.register(swaggerUi, {
+    routePrefix: '/docs',
+    uiConfig: { persistAuthorization: true, docExpansion: 'list' },
+  });
+
   // Guard de autenticación por Bearer token. /health y GET /settings/security
-  // quedan públicos; el resto exige token una vez configurado (ver auth.ts).
+  // y /docs quedan públicos; el resto exige token una vez configurado (ver auth.ts).
   registerAuth(app);
 
   app.get('/health', async () => ({ ok: true, ts: new Date().toISOString() }));

@@ -6,10 +6,13 @@ import { isApiTokenConfigured, verifyApiToken } from './settings/store.js';
  *   - GET /health              → healthcheck / readiness
  *   - GET /settings/security   → estado de configuración ({ apiTokenConfigured })
  *                                No expone ningún secreto, solo un booleano.
+ *   - GET /docs, /docs/*       → documentación Swagger UI + spec (el "Authorize"
+ *                                de la UI pide el token para probar endpoints)
  */
 function isPublicRoute(method: string, path: string): boolean {
   if (path === '/health') return true;
   if (method === 'GET' && path === '/settings/security') return true;
+  if (method === 'GET' && (path === '/docs' || path.startsWith('/docs/'))) return true;
   return false;
 }
 

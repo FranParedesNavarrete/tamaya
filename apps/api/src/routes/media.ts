@@ -15,7 +15,12 @@ function isAllowedMime(mime: string): boolean {
 
 export async function mediaRoutes(app: FastifyInstance) {
   // POST /media/upload — recibe un archivo multipart y devuelve { source, mime, size }
-  app.post('/upload', async (req, reply) => {
+  app.post('/upload', {
+    schema: {
+      summary: 'Subir imagen o vídeo',
+      description: 'multipart/form-data con un único campo de archivo. Solo acepta image/* y video/* (415 en otro caso). Devuelve `{ source, mime, size, originalName }`; `source` es la ruta que se pasa como media al crear un job.',
+    },
+  }, async (req, reply) => {
     const data = await req.file();
     if (!data) return reply.code(400).send({ error: 'no file provided' });
 

@@ -1,4 +1,6 @@
 import type { FastifyInstance } from 'fastify';
+import { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { z } from 'zod';
 import { sql } from 'drizzle-orm';
 import { getDb } from '@tamaya/db';
 import { resolveQueue, publishQueue } from '../queue/bullmq.js';
@@ -51,15 +53,27 @@ async function controlServerHealth(): Promise<boolean> {
   }
 }
 
+const QueueCountsSchema = z.object({
+  waiting: z.number(), active: z.number(), delayed: z.number(),
+  completed: z.number(), failed: z.number(), paused: z.number(),
+});
+
 /**
  * Endpoints de diagnóstico del pipeline. Todos protegidos por el guard de token
  * (van bajo /ops, que no está en la lista pública de auth.ts).
  */
-export async function opsRoutes(app: FastifyInstance) {
+export async function opsRoutes(fastify: FastifyInstance) {
+  const app = fastify.withTypeProvider<ZodTypeProvider>();
   const db = getDb();
 
   // GET /ops/queues — conteos BullMQ de ambas colas.
-  app.get('/queues', async () => {
+  app.get('/queues', {
+    schema: {
+      summary: 'Conteos de las colas BullMQ',
+      description: 'Jobs por estado de la cola de resolución (media) y de la de publicación.',
+      response: { 200: z.object({ resolve: QueueCountsSchema, publish: QueueCountsSchema }) },
+    },
+  }, async () => {
     const [resolve, publish] = await Promise.all([
       queueCounts(resolveQueue),
       queueCounts(publishQueue),
@@ -68,7 +82,30 @@ export async function opsRoutes(app: FastifyInstance) {
   });
 
   // GET /ops/publisher — ¿por qué (no) se está publicando?
-  app.get('/publisher', async () => {
+  app.get('/publisher', {
+    schema: {
+      summary: 'Estado del publicador de WhatsApp',
+      description: 'Heartbeats de worker-publish y del control server, sesión de WhatsApp y jobs pendientes. `message` resume por qué (no) se está publicando.',
+      response: {
+        200: z.object({
+          controlServerAvailable: z.boolean(),
+          controlOnline: z.boolean(),
+          sessionExists: z.boolean().nullable(),
+          publisherOnline: z.boolean(),
+          publisherLikelyRunning: z.boolean(),
+          publisherHeartbeat: z.object({
+            pid: z.number().optional(),
+            hostname: z.string().optional(),
+            updatedAt: z.string().optional(),
+            ageMs: z.number().optional(),
+          }).nullable(),
+          publishQueueWaiting: z.number(),
+          publishActive: z.number(),
+          message: z.string(),
+        }),
+      },
+    },
+  }, async () => {
     const [publish, pubHb, ctrlHb, controlServerAvailable] = await Promise.all([
       queueCounts(publishQueue),
       readHeartbeat('worker.publish.heartbeat'),
@@ -116,7 +153,12 @@ export async function opsRoutes(app: FastifyInstance) {
   });
 
   // POST /ops/publisher/restart — pide al control server nativo reiniciar worker-publish vía PM2.
-  app.post('/publisher/restart', async (_req, reply) => {
+  app.post('/publisher/restart', {
+    schema: {
+      summary: 'Reiniciar worker-publish',
+      description: 'Pide al control server nativo reiniciar worker-publish vía PM2. Responde 503 si el control server no está disponible.',
+    },
+  }, async (_req, reply) => {
     try {
       const { status, body } = await controlFetch('POST', '/publisher/restart', { timeoutMs: 35_000 });
       return reply.code(status).send(body);
@@ -129,7 +171,18 @@ export async function opsRoutes(app: FastifyInstance) {
   });
 
   // GET /ops/health — salud de las dependencias.
-  app.get('/health', async () => {
+  app.get('/health', {
+    schema: {
+      summary: 'Salud de las dependencias',
+      description: 'Comprueba base de datos, Redis, control server y heartbeat del publicador.',
+      response: {
+        200: z.object({
+          ok: z.boolean(), db: z.boolean(), redis: z.boolean(),
+          controlServer: z.boolean(), publisherOnline: z.boolean(), ts: z.string(),
+        }),
+      },
+    },
+  }, async () => {
     let dbOk = false;
     let redisOk = false;
     try {

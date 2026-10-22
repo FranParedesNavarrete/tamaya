@@ -6,7 +6,7 @@ import type {
 
 // VITE_API_BASE_URL se inyecta en build a partir de APP_URL:API_PORT en
 // docker-compose.yml. Fallback a localhost para dev fuera de Docker.
-const BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+export const BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
 
 // Prefijo con el que `@tamaya/core` marca el error cuando WhatsApp oculta el
 // panel completo de Estadísticas por no llegar el canal al mínimo de

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-  api, getStoredToken, setStoredToken, clearStoredToken,
+  api, BASE, getStoredToken, setStoredToken, clearStoredToken,
 } from '../api/client';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -14,7 +14,7 @@ import { SelectorsSection } from '../components/settings/SelectorsSection';
 import { OpsSection } from '../components/settings/OpsSection';
 import { InsightsCaptureSection } from '../components/settings/InsightsCaptureSection';
 import {
-  KeyRound, Copy, Check, Trash2, ShieldCheck, ShieldAlert, LayoutTemplate,
+  KeyRound, Copy, Check, Trash2, ShieldCheck, ShieldAlert, LayoutTemplate, BookOpen,
 } from 'lucide-react';
 
 export function Settings() {
@@ -212,6 +212,13 @@ export function Settings() {
       {/* ---------- Embeds ---------- */}
       <EmbedsSection token={localToken} />
 
+      {/* ---------- Documentación de la API ---------- */}
+      <DocsSection
+        token={localToken}
+        configured={configured}
+        onRotate={onGenerateClick}
+      />
+
       <ConfirmDialog
         open={confirmRotate}
         title="Rotar API token"
@@ -292,6 +299,80 @@ function EmbedsSection({ token }: { token: string | null }) {
         <p className="text-xs text-muted-foreground">
           Seguridad: evita usar URLs con <code>token=</code> en páginas públicas. Para producción real conviene crear después tokens embebibles con scopes/expiración.
         </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DocsSection({ token, configured, onRotate }: {
+  token: string | null;
+  configured: boolean | null;
+  onRotate: () => void;
+}) {
+  const docsUrl = `${BASE.replace(/\/$/, '')}/docs`;
+  const [copied, setCopied] = useState<'url' | 'token' | null>(null);
+
+  async function copy(what: 'url' | 'token', value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(what);
+      setTimeout(() => setCopied(null), 1800);
+    } catch { /* sin permiso de portapapeles: no hacemos nada */ }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base text-foreground">
+          <BookOpen className="h-4 w-4" /> Documentación de la API
+        </CardTitle>
+        <CardDescription>
+          Referencia interactiva (Swagger UI) de todos los endpoints. Para probarlos desde
+          ahí, pulsa «Authorize» y pega el token.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-1.5">
+          <Label>URL de la documentación</Label>
+          <div className="flex items-center gap-2">
+            <a
+              className="flex-1 truncate rounded bg-muted px-2 py-1.5 text-xs text-primary underline"
+              href={docsUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {docsUrl}
+            </a>
+            <Button size="sm" variant="outline" onClick={() => void copy('url', docsUrl)}>
+              {copied === 'url' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              <span className="ml-1">{copied === 'url' ? 'Copiado' : 'Copiar'}</span>
+            </Button>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>API token</Label>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!token}
+              onClick={() => token && void copy('token', token)}
+            >
+              {copied === 'token' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              <span className="ml-1">{copied === 'token' ? 'Copiado' : 'Copiar token'}</span>
+            </Button>
+            <Button size="sm" onClick={onRotate}>
+              <KeyRound className="h-4 w-4 mr-1" />
+              {configured ? 'Rotar token' : 'Generar token'}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {token
+              ? 'Se copia el token guardado en este navegador.'
+              : 'No hay token guardado en este navegador: genera uno nuevo o pega uno existente en «Seguridad API».'}
+          </p>
+        </div>
       </CardContent>
     </Card>
   );
