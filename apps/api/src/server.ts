@@ -14,6 +14,39 @@ import { registerAuth } from './auth.js';
 import { closeQueue } from './queue/bullmq.js';
 import { startInsightsScheduler } from './insights-scheduler.js';
 
+// Nombre visible del grupo en la documentación según el prefijo de la ruta.
+const TAG_LABELS: Record<string, string> = {
+  jobs: 'Jobs',
+  channels: 'Canales',
+  media: 'Media',
+  stats: 'Estadísticas de envíos',
+  settings: 'Ajustes',
+  ops: 'Diagnóstico',
+};
+
+const INSIGHTS_DOCS: Record<string, { summary: string; description: string }> = {
+  'GET /channels/{id}/insights': {
+    summary: 'Última captura de estadísticas del canal',
+    description: 'Último snapshot de las estadísticas de WhatsApp (alcance, seguidores, crecimiento, regiones). Devuelve `{ id, tenantId, channelId, capturedAt, data }`. 404 si el canal aún no tiene ninguna captura.',
+  },
+  'GET /channels/{id}/insights/history': {
+    summary: 'Histórico de capturas del canal',
+    description: 'Snapshots anteriores, del más reciente al más antiguo, para ver la evolución. `limit` de 1 a 200 (30 por defecto).',
+  },
+  'POST /channels/{id}/insights/refresh': {
+    summary: 'Capturar ahora las estadísticas del canal',
+    description: 'Lanza la captura con el navegador de WhatsApp para este canal (equivale a «Actualizar estadísticas»). Si el canal no llega al mínimo de seguidores, WhatsApp oculta el panel y devuelve INSIGHTS_NOT_AVAILABLE_YET.',
+  },
+  'POST /channels/insights/refresh-all': {
+    summary: 'Capturar las estadísticas de todos los canales',
+    description: 'Inicia en segundo plano la captura de todos los canales activos. Consulta el progreso con `GET /channels/insights/refresh-all/status`.',
+  },
+  'GET /channels/insights/refresh-all/status': {
+    summary: 'Progreso de la captura de todos los canales',
+    description: 'Estado de la captura en curso o de la última ejecutada.',
+  },
+};
+
 async function main() {
   const app = Fastify({
     logger: {
@@ -46,8 +79,19 @@ async function main() {
     transform: (args) => {
       // Rutas sin `schema` llegan con schema undefined: les damos uno mínimo con tag.
       const out = jsonSchemaTransform({ ...args, schema: args.schema ?? {} });
-      const schema = out.schema as { tags?: string[] };
-      if (!schema.tags) schema.tags = [args.url.split('/')[1] || 'general'];
+      const schema = out.schema as { tags?: string[]; summary?: string; description?: string };
+      if (!schema.tags) {
+        const prefix = args.url.split('/')[1] || 'general';
+        schema.tags = [TAG_LABELS[prefix] ?? prefix];
+      }
+      // Insights de canal: viven bajo /channels pero son lo que se ve en
+      // "Estadísticas" de WhatsApp, y sin esto solo aparecen como un path.
+      if (args.url.includes('/insights') && !schema.summary) {
+        schema.tags = ['Estadísticas de canal'];
+        const method = [args.route.method].flat()[0];
+        const doc = INSIGHTS_DOCS[`${method} ${args.url.replace(/:(\w+)/g, '{$1}').replace(/\/$/, '')}`];
+        if (doc) Object.assign(schema, doc);
+      }
       return out;
     },
   });

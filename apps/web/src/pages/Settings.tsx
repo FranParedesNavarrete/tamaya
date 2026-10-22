@@ -309,12 +309,14 @@ function DocsSection({ token, configured, onRotate }: {
   configured: boolean | null;
   onRotate: () => void;
 }) {
+  // Vista dentro de la app (Scalar) y Swagger UI clásico servido por la API.
+  const viewUrl = `${window.location.origin}/api/v1/documentation`;
   const docsUrl = `${BASE.replace(/\/$/, '')}/docs`;
-  const [copied, setCopied] = useState<'url' | 'token' | null>(null);
+  const [copied, setCopied] = useState<'view' | 'url' | 'token' | null>(null);
   const [copyFailed, setCopyFailed] = useState(false);
   const [reveal, setReveal] = useState(false);
 
-  async function copy(what: 'url' | 'token', value: string) {
+  async function copy(what: 'view' | 'url' | 'token', value: string) {
     const ok = await copyText(value);
     setCopyFailed(!ok);
     if (!ok) return;
@@ -329,28 +331,33 @@ function DocsSection({ token, configured, onRotate }: {
           <BookOpen className="h-4 w-4" /> Documentación de la API
         </CardTitle>
         <CardDescription>
-          Referencia interactiva (Swagger UI) de todos los endpoints. Para probarlos desde
-          ahí, pulsa «Authorize» y pega el token.
+          Referencia interactiva de todos los endpoints, en la app (con tu token ya cargado)
+          o en Swagger UI (pulsa «Authorize» y pega el token).
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="space-y-1.5">
-          <Label>URL de la documentación</Label>
-          <div className="flex items-center gap-2">
-            <a
-              className="flex-1 truncate rounded bg-muted px-2 py-1.5 text-xs text-primary underline"
-              href={docsUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {docsUrl}
-            </a>
-            <Button size="sm" variant="outline" onClick={() => void copy('url', docsUrl)}>
-              {copied === 'url' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              <span className="ml-1">{copied === 'url' ? 'Copiado' : 'Copiar'}</span>
-            </Button>
+        {[
+          { key: 'view' as const, label: 'Vista en la app', url: viewUrl },
+          { key: 'url' as const, label: 'Swagger UI (servido por la API)', url: docsUrl },
+        ].map((d) => (
+          <div key={d.key} className="space-y-1.5">
+            <Label>{d.label}</Label>
+            <div className="flex items-center gap-2">
+              <a
+                className="flex-1 truncate rounded bg-muted px-2 py-1.5 text-xs text-primary underline"
+                href={d.url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {d.url}
+              </a>
+              <Button size="sm" variant="outline" onClick={() => void copy(d.key, d.url)}>
+                {copied === d.key ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                <span className="ml-1">{copied === d.key ? 'Copiado' : 'Copiar'}</span>
+              </Button>
+            </div>
           </div>
-        </div>
+        ))}
 
         <div className="space-y-1.5">
           <Label>API token</Label>

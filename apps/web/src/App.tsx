@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Link, NavLink } from 'react-router-dom';
 import { LayoutDashboard, ListTodo, Radio, Settings as SettingsIcon, X } from 'lucide-react';
 import { Dashboard } from './pages/Dashboard';
@@ -9,6 +9,8 @@ import { ChannelForm } from './pages/ChannelForm';
 import { ChannelShow } from './pages/ChannelShow';
 import { Settings } from './pages/Settings';
 import { EmbedWidget } from './pages/EmbedWidget';
+// Scalar pesa bastante: solo se descarga al entrar en la documentación.
+const ApiDocs = lazy(() => import('./pages/ApiDocs'));
 import { ThemeToggle } from './components/theme-toggle';
 import { isEmbed } from './lib/use-embed';
 
@@ -80,6 +82,10 @@ export default function App() {
           <Route path="/channels/:id/edit" element={<ChannelForm />} />
           <Route path="/channels/:id" element={<ChannelShow />} />
           <Route path="/settings" element={<Settings />} />
+          <Route
+            path="/api/v1/documentation"
+            element={<Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Cargando documentación…</div>}><ApiDocs /></Suspense>}
+          />
           <Route path="/embed" element={<EmbedWidget />} />
           <Route path="/embed/:widget" element={<EmbedWidget />} />
         </Routes>
