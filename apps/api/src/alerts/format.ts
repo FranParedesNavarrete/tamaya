@@ -31,3 +31,9 @@ export function hintForError(err: string | null | undefined): string | null {
 export function pruneNotified(map: NotifiedMap, now: number): NotifiedMap {
   return Object.fromEntries(Object.entries(map).filter(([, ts]) => now - ts < STATE_RETENTION_MS));
 }
+
+/** Recorta a `max` caracteres y lo indica con «…» (para que no parezca un error cortado por accidente). */
+export function truncate(text: string, max: number): string {
+  const t = text.replace(/\s+/g, ' ').trim();
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+}

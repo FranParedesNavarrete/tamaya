@@ -19,7 +19,7 @@ import { getDb, schema } from '@tamaya/db';
 import { publishQueue } from '../queue/bullmq.js';
 import { getSetting, setSetting } from '../settings/store.js';
 import { alertsEnabled, readAlertConfig, sendAlert } from './notify.js';
-import { fmtMadrid, hintForError, pruneNotified, type NotifiedMap } from './format.js';
+import { fmtMadrid, hintForError, pruneNotified, truncate, type NotifiedMap } from './format.js';
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
 
@@ -102,7 +102,7 @@ async function tick(): Promise<void> {
       lines.push(`Jobs que no se han podido publicar (${newFailed.length}):`);
       const hints = new Set<string>();
       for (const j of newFailed) {
-        lines.push(`• ${j.channelName} — programado ${fmtMadrid(j.scheduledAt)} — ${(j.lastError ?? 'sin detalle').slice(0, 180)}`);
+        lines.push(`• ${j.channelName} — programado ${fmtMadrid(j.scheduledAt)} — ${truncate(j.lastError ?? 'sin detalle', 220)}`);
         const hint = hintForError(j.lastError);
         if (hint) hints.add(hint);
         newKeys.push(`failed:${j.id}`);
