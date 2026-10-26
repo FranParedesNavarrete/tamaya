@@ -96,7 +96,14 @@ export async function jobsRoutes(app: FastifyInstance) {
       scheduledAt: scheduledAt.toISOString(),
     });
 
-    req.log.info({ jobId, scheduledAt: scheduledAt.toISOString(), requestedAt: input.scheduledAt ?? input.datetime }, 'job created and enqueued');
+    req.log.info({
+      jobId,
+      channel: channel.name,
+      scheduledAt: scheduledAt.toISOString(),
+      requestedAt: input.scheduledAt ?? input.datetime,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    }, 'job created and enqueued');
     return { id: jobId, status: 'pending' };
   });
 
@@ -163,6 +170,14 @@ export async function jobsRoutes(app: FastifyInstance) {
     }
     await db.update(schema.jobs).set({ status: 'cancelled' })
       .where(eq(schema.jobs.id, req.params.id));
+    req.log.info({
+      jobId: req.params.id,
+      previousStatus: rows[0].status,
+      channel: rows[0].channelName,
+      scheduledAt: rows[0].scheduledAt,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    }, 'job cancelled');
     return { id: req.params.id, status: 'cancelled' };
   });
 
@@ -191,7 +206,7 @@ export async function jobsRoutes(app: FastifyInstance) {
     }
 
     await requeuePublish(job.id);
-    req.log.info({ jobId: job.id }, 'job requeued to publish-queue');
+    req.log.info({ jobId: job.id, previousStatus: job.status, ip: req.ip }, 'job requeued to publish-queue');
     return { id: job.id, status: 'ready', requeued: true };
   });
 
@@ -210,6 +225,14 @@ export async function jobsRoutes(app: FastifyInstance) {
     await db.update(schema.jobs)
       .set({ deletedAt: new Date() })
       .where(eq(schema.jobs.id, req.params.id));
+    req.log.info({
+      jobId: req.params.id,
+      previousStatus: rows[0].status,
+      channel: rows[0].channelName,
+      scheduledAt: rows[0].scheduledAt,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    }, 'job deleted');
     return { id: req.params.id, deleted: true };
   });
 }

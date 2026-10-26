@@ -6,6 +6,7 @@ import { getDb } from '@tamaya/db';
 import { resolveQueue, publishQueue } from '../queue/bullmq.js';
 import { getSetting } from '../settings/store.js';
 import { controlFetch, ControlUnavailableError } from '../control-client.js';
+import { alertsEnabled, readAlertConfig, sendAlert } from '../alerts/notify.js';
 
 // Un heartbeat se considera "fresco" (proceso online) si su updatedAt tiene
 // menos de este umbral. El worker late cada ~12s.
@@ -168,6 +169,23 @@ export async function opsRoutes(fastify: FastifyInstance) {
       }
       throw err;
     }
+  });
+
+  // POST /ops/alerts/test — envía una alerta de prueba por n8n (email y/o WhatsApp).
+  app.post('/alerts/test', {
+    schema: {
+      summary: 'Enviar una alerta de prueba',
+      description: 'Manda un aviso de prueba por los destinos configurados (ALERT_EMAIL / ALERT_WHATSAPP) a través del flujo de n8n. 409 si las alertas están desactivadas.',
+    },
+  }, async (_req, reply) => {
+    const cfg = readAlertConfig();
+    if (!alertsEnabled(cfg)) {
+      return reply.code(409).send({
+        error: 'alertas desactivadas: define N8N_BASE_URL, N8N_NOTIFICATION_PATH y ALERT_EMAIL o ALERT_WHATSAPP',
+      });
+    }
+    const delivered = await sendAlert('[Tamaya] Prueba de alertas', ['Si recibes este aviso, las alertas de Tamaya funcionan.'], cfg);
+    return { delivered, email: Boolean(cfg.email), whatsapp: Boolean(cfg.phone) };
   });
 
   // GET /ops/health — salud de las dependencias.

@@ -84,6 +84,18 @@ services:
       TAMAYA_CONTROL_TOKEN: ${TAMAYA_CONTROL_TOKEN:-}
       TAMAYA_TMP_DIR: ${TAMAYA_TMP_DIR}
       LOG_LEVEL: ${LOG_LEVEL:-debug}
+      # Log en fichero rotado (visible en el host en ./logs/api/).
+      LOG_DIR: /app/logs
+      # Días que se conserva la media descargada (vacío = no se borra nunca).
+      TAMAYA_MEDIA_TTL_DAYS: ${TAMAYA_MEDIA_TTL_DAYS:-}
+      # Alertas por n8n (vacío = desactivadas). Ver .env.example.
+      N8N_BASE_URL: ${N8N_BASE_URL:-}
+      N8N_NOTIFICATION_PATH: ${N8N_NOTIFICATION_PATH:-}
+      ALERT_EMAIL: ${ALERT_EMAIL:-}
+      ALERT_WHATSAPP: ${ALERT_WHATSAPP:-}
+      ALERT_TO_NAME: ${ALERT_TO_NAME:-Tamaya}
+      ALERT_CHECK_INTERVAL_SEC: ${ALERT_CHECK_INTERVAL_SEC:-60}
+      ALERT_OVERDUE_MINUTES: ${ALERT_OVERDUE_MINUTES:-10}
     # En Linux permite que la API alcance el control server nativo del host.
     # En Docker Desktop es inocuo y host.docker.internal ya existe.
     extra_hosts:
@@ -92,6 +104,7 @@ services:
       - "${API_PORT}:${API_PORT}"
     volumes:
       - ${TAMAYA_TMP_DIR}:${TAMAYA_TMP_DIR}
+      - ./logs/api:/app/logs
       # Montajes útiles solo en desarrollo:
       - ./apps/api:/app/apps/api
       - ./packages:/app/packages

@@ -1,4 +1,6 @@
+import { join } from 'node:path';
 import Fastify from 'fastify';
+import { stdTimeFunctions } from 'pino';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import swagger from '@fastify/swagger';
@@ -13,6 +15,39 @@ import { opsRoutes } from './routes/ops.js';
 import { registerAuth } from './auth.js';
 import { closeQueue } from './queue/bullmq.js';
 import { startInsightsScheduler } from './insights-scheduler.js';
+import { startAlertWatchdog } from './alerts/watchdog.js';
+import { startMediaCleanup } from './media-cleanup.js';
+
+/**
+ * Logger de la API: siempre a stdout (docker logs) y, si hay LOG_DIR, también a
+ * fichero rotado (api.YYYY-MM-DD.N.log: diario o a 20 MB, se conservan 14).
+ * Los logs de docker se pierden al recrear el contenedor; el fichero no.
+ */
+function buildLoggerConfig() {
+  const level = process.env.LOG_LEVEL ?? 'info';
+  const logDir = process.env.LOG_DIR?.trim();
+  const targets: Array<{ target: string; level: string; options: Record<string, unknown> }> = [
+    process.env.NODE_ENV !== 'production'
+      ? { target: 'pino-pretty', level, options: {} }
+      : { target: 'pino/file', level, options: { destination: 1 } },
+  ];
+  if (logDir) {
+    targets.push({
+      target: 'pino-roll',
+      level: process.env.LOG_FILE_LEVEL ?? 'info',
+      options: {
+        file: join(logDir, 'api'),
+        extension: '.log',
+        frequency: 'daily',
+        dateFormat: 'yyyy-MM-dd',
+        size: '20m',
+        mkdir: true,
+        limit: { count: 14 },
+      },
+    });
+  }
+  return { level, timestamp: stdTimeFunctions.isoTime, transport: { targets } };
+}
 
 // Nombre visible del grupo en la documentación según el prefijo de la ruta.
 const TAG_LABELS: Record<string, string> = {
@@ -48,14 +83,7 @@ const INSIGHTS_DOCS: Record<string, { summary: string; description: string }> = 
 };
 
 async function main() {
-  const app = Fastify({
-    logger: {
-      level: process.env.LOG_LEVEL ?? 'info',
-      transport: process.env.NODE_ENV !== 'production'
-        ? { target: 'pino-pretty' }
-        : undefined,
-    },
-  }).withTypeProvider<ZodTypeProvider>();
+  const app = Fastify({ logger: buildLoggerConfig() }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
@@ -117,10 +145,14 @@ async function main() {
   await app.listen({ port, host: '0.0.0.0' });
 
   const stopInsightsScheduler = startInsightsScheduler();
+  const stopAlertWatchdog = startAlertWatchdog();
+  const stopMediaCleanup = startMediaCleanup();
 
   const shutdown = async () => {
     app.log.info('shutting down');
     stopInsightsScheduler();
+    stopAlertWatchdog();
+    stopMediaCleanup();
     await closeQueue();
     await app.close();
     process.exit(0);
