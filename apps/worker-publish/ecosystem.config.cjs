@@ -11,6 +11,10 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: '1G',
+      // pm2 manda SIGKILL a los 1,6 s por defecto; un envío dura 40-80 s y matar
+      // Chromium a mitad corrompe el perfil de la sesión. El shutdown del worker
+      // espera a que acabe el job en curso.
+      kill_timeout: 180000,
       env: {
         NODE_ENV: 'production',
       },

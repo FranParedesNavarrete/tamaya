@@ -17,6 +17,7 @@ import { closeQueue } from './queue/bullmq.js';
 import { startInsightsScheduler } from './insights-scheduler.js';
 import { startAlertWatchdog } from './alerts/watchdog.js';
 import { startMediaCleanup } from './media-cleanup.js';
+import { startReconciler } from './reconcile.js';
 
 /**
  * Logger de la API: siempre a stdout (docker logs) y, si hay LOG_DIR, también a
@@ -147,12 +148,14 @@ async function main() {
   const stopInsightsScheduler = startInsightsScheduler();
   const stopAlertWatchdog = startAlertWatchdog();
   const stopMediaCleanup = startMediaCleanup();
+  const stopReconciler = startReconciler();
 
   const shutdown = async () => {
     app.log.info('shutting down');
     stopInsightsScheduler();
     stopAlertWatchdog();
     stopMediaCleanup();
+    stopReconciler();
     await closeQueue();
     await app.close();
     process.exit(0);

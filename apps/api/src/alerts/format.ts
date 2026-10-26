@@ -22,6 +22,9 @@ export function hintForError(err: string | null | undefined): string | null {
   if (err.includes('ENOENT')) {
     return 'Falta el fichero de media (la URL original caduca a los 5 min): hay que recrear el job.';
   }
+  if (err.includes('INTERRUPTED')) {
+    return 'El worker se detuvo durante el envío: puede haberse publicado. Revisa el canal antes de reintentar.';
+  }
   if (err.includes('POST_SEND_VERIFICATION_FAILED')) {
     return 'Puede haberse publicado: revisa el canal antes de reintentar.';
   }

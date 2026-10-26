@@ -162,6 +162,10 @@ const worker = new Worker(
   {
     connection,
     concurrency: 1,   // NUNCA >1 — una cuenta WA = una sesión
+    // Si el worker muere a mitad de envío, BullMQ daría el job por "estancado" y
+    // lo relanzaría (maxStalledCount por defecto = 1): podría publicarse dos veces.
+    // Con 0 pasa a failed y el handler de abajo lo marca como INTERRUPTED.
+    maxStalledCount: 0,
   },
 );
 
@@ -232,6 +236,14 @@ function inferMediaKindForList(mimes: Array<string | undefined>): 'image' | 'vid
 
 worker.on('failed', async (job, err) => {
   if (!job) return;
+  if (err.message.includes('stalled')) {
+    await db.update(schema.jobs).set({
+      status: 'failed',
+      lastError: 'INTERRUPTED: el worker se detuvo durante el envío; puede haberse publicado. No se reintentó para evitar duplicados.',
+    }).where(and(eq(schema.jobs.id, (job.data as { jobId: string }).jobId), eq(schema.jobs.status, 'publishing'), isNull(schema.jobs.deletedAt)));
+    logger.warn({ jobId: job.data?.jobId }, 'job estancado (worker detenido durante el envío) — NO se reintenta');
+    return;
+  }
   const exhausted = job.attemptsMade >= (job.opts.attempts ?? 3);
   if (exhausted) {
     await db.update(schema.jobs).set({
