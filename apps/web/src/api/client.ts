@@ -188,6 +188,12 @@ export interface OpsHealth {
   publisherOnline: boolean;
   ts: string;
 }
+export interface OpsAlertTest {
+  delivered: boolean;
+  email: boolean;
+  whatsapp: boolean;
+}
+
 export interface OpsRestartPublisher {
   ok: boolean;
   process: string;
@@ -243,6 +249,7 @@ export const api = {
   opsPublisher: () => req<OpsPublisher>('/ops/publisher'),
   opsHealth: () => req<OpsHealth>('/ops/health'),
   restartPublisher: () => req<OpsRestartPublisher>('/ops/publisher/restart', { method: 'POST' }),
+  testAlert: () => req<OpsAlertTest>('/ops/alerts/test', { method: 'POST' }),
 
   // Channels
   listChannels: () => req<Channel[]>('/channels'),

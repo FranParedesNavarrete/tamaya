@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, type OpsQueues, type OpsPublisher, type OpsHealth } from '../../api/client';
 import { Button } from '../ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../ui/card';
-import { Activity, RefreshCw, CheckCircle2, XCircle, HelpCircle } from 'lucide-react';
+import { Activity, RefreshCw, CheckCircle2, XCircle, HelpCircle, BellRing } from 'lucide-react';
 
 function Dot({ ok }: { ok: boolean }) {
   return ok
@@ -34,6 +34,8 @@ export function OpsSection() {
   const [restartMessage, setRestartMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [restarting, setRestarting] = useState(false);
+  const [alertMessage, setAlertMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [sendingAlert, setSendingAlert] = useState(false);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -70,6 +72,24 @@ export function OpsSection() {
       setRestarting(false);
     }
   }, [refresh]);
+
+  const sendTestAlert = useCallback(async () => {
+    setSendingAlert(true);
+    setError(null);
+    setAlertMessage(null);
+    try {
+      const r = await api.testAlert();
+      const dest = [r.email && 'correo', r.whatsapp && 'WhatsApp'].filter(Boolean).join(' y ');
+      setAlertMessage(r.delivered
+        ? { ok: true, text: `Alerta enviada por ${dest}. Comprueba que ha llegado.` }
+        : { ok: false, text: 'n8n no aceptó la alerta. Revisa los logs de la API (docker compose logs api).' });
+    } catch (e) {
+      // 409 = alertas desactivadas (faltan variables en el .env del servidor).
+      setAlertMessage({ ok: false, text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setSendingAlert(false);
+    }
+  }, []);
 
   return (
     <Card id="diagnostico">
@@ -123,6 +143,11 @@ export function OpsSection() {
             )}
 
             {restartMessage && <div className="text-xs text-green-600">{restartMessage}</div>}
+            {alertMessage && (
+              <div className={`text-xs ${alertMessage.ok ? 'text-green-600' : 'text-red-600'} break-all`}>
+                {alertMessage.text}
+              </div>
+            )}
             {error && <div className="text-xs text-red-600 break-all">{error}</div>}
 
             <div className="flex flex-wrap items-center gap-2">
@@ -137,6 +162,16 @@ export function OpsSection() {
               >
                 <RefreshCw className={`h-4 w-4 mr-1 ${restarting ? 'animate-spin' : ''}`} />
                 {restarting ? 'Reiniciando…' : 'Reiniciar worker-publish'}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void sendTestAlert()}
+                disabled={sendingAlert}
+                title="Manda un aviso de prueba por correo y WhatsApp (los destinos del .env) a través de n8n."
+              >
+                <BellRing className="h-4 w-4 mr-1" />
+                {sendingAlert ? 'Enviando…' : 'Enviar alerta de prueba'}
               </Button>
               <span title="Sirve para refrescar worker-publish tras vincular WhatsApp o cambiar ajustes/selectores. Lanza un pm2 restart tamaya-worker-publish en el host.">
                 <HelpCircle
