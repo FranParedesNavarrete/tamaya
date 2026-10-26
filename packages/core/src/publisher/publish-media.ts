@@ -28,6 +28,7 @@ import {
 } from '../browser/dom-helpers.js';
 import { logger } from '../logger.js';
 import { navigateToChannel } from './publish-text.js';
+import { startNetworkDiagnostics, type NetworkDiagnostics } from './network-diag.js';
 import {
   findLastThreadTexts,
   findPageVisibleText,
@@ -157,6 +158,7 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
   const context = await launchPersistentContextForTenant();
   let debugDump: string | undefined;
   let sendClicked = false;
+  let net: NetworkDiagnostics | undefined;
 
   const expected: PublishVerificationMeta['expected'] = {
     hasText: Boolean(input.body && input.body.length > 0),
@@ -168,6 +170,7 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
 
   try {
     const page = context.pages()[0] ?? (await context.newPage());
+    net = startNetworkDiagnostics(page);
     await page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded' });
     await waitForAppReady(page, { timeout: 60_000 });
     // WA Web abre modales ("What's new on WhatsApp Web"…) justo al cargar y
@@ -200,6 +203,9 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
     await waitForSendButtonReady(page);
     const threadMarkersBeforeSend = await countThreadMarkers(page);
     const indicatorsBeforeSend = await countIndicators(page);
+    // Fallos que YA había en el hilo (p.ej. un envío anterior atascado): solo
+    // cuenta como fallo de ESTE envío un icono de error nuevo.
+    const failedBeforeSend = await countFailed(page);
 
     // ---- PUNTO DE NO RETORNO: a partir de aquí, el contenido puede haberse
     // publicado, así que un fallo NO debe reintentarse automáticamente. ----
@@ -212,9 +218,13 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
       body: input.body,
       threadMarkersBeforeSend,
       indicatorsBeforeSend,
+      failedBeforeSend,
     });
 
     const { result, reason } = decideResult(expected, observed);
+    if (net && net.events.length > 0) {
+      logger.warn({ result, net: net.events }, 'fallos de red con hosts de WhatsApp durante el envío');
+    }
     const verificationMeta: PublishVerificationMeta = {
       expected,
       observed,
@@ -248,7 +258,9 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
       success: false,
       durationMs: Date.now() - started,
       mediaSha256,
-      error: `${reason ?? 'post-send verification failed'} | señales: ${signals}`,
+      error: `${reason ?? 'post-send verification failed'} | señales: ${signals}${
+        net && net.events.length > 0 ? ` | red: ${net.summary()}` : ''
+      }`,
       debugDump,
       verificationMeta,
       postSendMaybeDelivered: true,
@@ -288,6 +300,7 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
       postSendMaybeDelivered: sendClicked,
     };
   } finally {
+    net?.stop();
     await context.close();
   }
 }
@@ -762,7 +775,7 @@ async function countThreadMarkers(page: Page): Promise<number> {
  * `<svg><title>wds-ic-delivered|wds-ic-read</title>` (verificado 2026-08-13),
  * así que hay que aceptar ambas familias.
  */
-const INDICATOR_INNER = [
+export const INDICATOR_INNER = [
   'span:has(> svg > title:text-is("wds-ic-delivered"))',
   'span:has(> svg > title:text-is("wds-ic-read"))',
   'span[aria-label*="Sent" i]:has(> svg > title)',
@@ -771,19 +784,33 @@ const INDICATOR_INNER = [
   'span[data-icon="msg-dblcheck"]',
 ];
 /** Pendiente de subida (reloj). Nombre nuevo aún no observado ⇒ lista amplia. */
-const PENDING_INNER = [
+export const PENDING_INNER = [
   'span[data-icon="msg-time"]',
   'span:has(> svg > title:text-is("wds-ic-pending"))',
   'span:has(> svg > title:text-is("wds-ic-clock"))',
   'span[aria-label*="Pending" i]:has(> svg > title)',
+  // Overlay de subida de la burbuja (flecha + tamaño, p.ej. "34 kB"). Visto en WA Web 2026-10.
+  'svg > title:text-is("ic-upload")',
 ];
-const FAILED_INNER = [
+/**
+ * Mensaje que WhatsApp no pudo enviar. OJO: los nombres antiguos (msg-failed,
+ * message-fail, "Reintentar") ya no existen en el DOM: el icono rojo actual es
+ * `div[data-testid="fail-container"]` con un botón aria-label "Se produjo un
+ * error. Haz clic para obtener más información." (idioma-dependiente), y un
+ * svg con title `ic-error` (idioma-independiente). Por eso un envío fallido
+ * salía como "enviado": nadie veía el icono.
+ */
+export const FAILED_INNER = [
+  '[data-testid="fail-container"]',
+  'svg > title:text-is("ic-error")',
   'span[data-icon="msg-failed"]',
   'span[data-icon="message-fail"]',
   'span:has(> svg > title:text-is("message-fail"))',
   '[aria-label*="Reintentar" i]',
   '[aria-label*="Retry" i]',
 ];
+/** Tras terminar la subida, cuánto esperamos a ver el tick de entregado (o un error). */
+const DELIVERY_CONFIRM_MS = 60_000;
 
 /**
  * Verifica el resultado tras pulsar Send, SIN depender solo de los ticks
@@ -798,9 +825,10 @@ async function verifyAfterSend(
     body?: string;
     threadMarkersBeforeSend: number;
     indicatorsBeforeSend: number;
+    failedBeforeSend: number;
   },
 ): Promise<VerificationObserved> {
-  const { kind, sizeMb, body, threadMarkersBeforeSend, indicatorsBeforeSend } = opts;
+  const { kind, sizeMb, body, threadMarkersBeforeSend, indicatorsBeforeSend, failedBeforeSend } = opts;
   const total = scaledTimeout(TIMEOUTS[kind].upload, sizeMb);
   const startedAt = Date.now();
   const overallDeadline = startedAt + total;
@@ -883,14 +911,38 @@ async function verifyAfterSend(
       page.locator(pendingSelector).count().catch(() => 0),
       page.locator(failedSelector).count().catch(() => 0),
     ]);
-    if (failed > 0) {
+    if (failed > failedBeforeSend) {
       observed.uploadPendingCleared = false;
-      logger.warn('upload marked as failed by WhatsApp (retry indicator found)');
+      logger.warn({ failed, failedBeforeSend }, 'upload marked as failed by WhatsApp (error icon appeared in the thread)');
       return observed;
     }
     if (pending === 0) {
+      // Ya no hay reloj ni overlay de subida, pero eso NO prueba que se haya
+      // entregado: la burbuja local existe igual aunque el envío falle. Hay que
+      // VER el tick de entregado (o un icono de error) antes de dar nada por bueno.
+      if (!observed.indicatorAppeared) {
+        const confirmDeadline = Math.min(overallDeadline, Date.now() + DELIVERY_CONFIRM_MS);
+        while (Date.now() < confirmDeadline) {
+          if ((await page.locator(indicatorSelector).count().catch(() => 0)) > indicatorsBeforeSend) {
+            observed.indicatorAppeared = true;
+            break;
+          }
+          if ((await page.locator(failedSelector).count().catch(() => 0)) > failedBeforeSend) {
+            observed.uploadPendingCleared = false;
+            logger.warn({ failedBeforeSend }, 'error icon appeared while waiting for the delivered tick');
+            return observed;
+          }
+          await page.waitForTimeout(1000);
+        }
+        if (!observed.indicatorAppeared) {
+          logger.warn({ waitedMs: DELIVERY_CONFIRM_MS }, 'no delivered tick appeared after the upload finished');
+        }
+      }
       observed.uploadPendingCleared = true;
-      logger.info({ elapsedMs: Date.now() - startedAt }, 'upload completed — no pending');
+      logger.info(
+        { elapsedMs: Date.now() - startedAt, deliveredTick: observed.indicatorAppeared },
+        'upload completed — no pending',
+      );
       return observed;
     }
     if (Date.now() - lastLog > 10_000) {
@@ -910,7 +962,7 @@ async function verifyAfterSend(
  * duplicar: solo 'verification_failed' (retryable) cuando hay evidencia de que
  * NO se publicó; el resto post-send es 'ambiguous_after_send' (no retry).
  */
-function decideResult(
+export function decideResult(
   expected: PublishVerificationMeta['expected'],
   o: VerificationObserved,
 ): { result: PublishVerificationMeta['result']; reason?: string } {
@@ -937,21 +989,19 @@ function decideResult(
     return { result: 'verification_failed', reason: 'WhatsApp marcó el envío como fallido y no apareció contenido esperado' };
   }
 
-  // En Channels los ticks y el conteo de burbujas pueden no aparecer aunque el
-  // contenido sí esté visible en los últimos items. Si encontramos TODO lo que
-  // esperábamos (caption/texto y media), el preview cerró y no hay fallo de
-  // subida, lo consideramos verificado aunque no haya ticks.
-  if (expectedContentVerified && o.previewClosed && o.uploadPendingCleared !== false) {
-    return { result: 'verified' };
-  }
-
-  if (deliveredEvidence && textOk && (!expected.hasMedia || o.mediaDetected !== false) && o.uploadPendingCleared !== false) {
+  // VERIFICADO = tick de entregado NUEVO en el hilo + contenido esperado + sin
+  // fallo de subida. Antes bastaba con que la burbuja LOCAL contuviera el texto
+  // y la media: esa burbuja se pinta al instante aunque WhatsApp no llegue a
+  // enviar nada (reloj o icono rojo), y así se marcaron como `sent` envíos que
+  // nunca se publicaron. `threadItemAppeared` solo prueba que hay burbuja, no
+  // que se entregara, por eso ya no cuenta como evidencia de entrega.
+  if (o.indicatorAppeared && textOk && (!expected.hasMedia || o.mediaDetected !== false) && o.uploadPendingCleared !== false) {
     return { result: 'verified' };
   }
 
   // Cualquier otra situación tras pulsar Send: no confirmamos, no reintentar.
   const reasons: string[] = [];
-  if (!deliveredEvidence) reasons.push('sin indicador ni item nuevo en el hilo');
+  if (!o.indicatorAppeared) reasons.push('sin tick de entregado en el hilo (puede seguir pendiente o haber fallado en WhatsApp)');
   if (expected.hasText && o.textMatched !== true) reasons.push('caption/texto no confirmado en el hilo');
   if (expected.hasMedia && o.mediaDetected === false) reasons.push('media no detectada en el hilo');
   if (o.uploadPendingCleared === false) reasons.push('WhatsApp marcó fallo de subida');
@@ -989,6 +1039,11 @@ function assertUsableMediaExtensions(paths: string[]): void {
 }
 
 /** Nº de indicadores (ticks) en el hilo. Línea base para exigir uno NUEVO. */
+async function countFailed(page: Page): Promise<number> {
+  const selector = (await scopedSelectors(page, FAILED_INNER)).join(', ');
+  return page.locator(selector).count().catch(() => 0);
+}
+
 async function countIndicators(page: Page): Promise<number> {
   const selector = (await scopedSelectors(page, INDICATOR_INNER)).join(', ');
   return page.locator(selector).count().catch(() => 0);
