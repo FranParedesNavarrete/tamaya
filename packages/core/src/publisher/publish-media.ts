@@ -813,6 +813,13 @@ export const FAILED_INNER = [
 ];
 /** Tras terminar la subida, cuánto esperamos a ver el tick de entregado (o un error). */
 const DELIVERY_CONFIRM_MS = 60_000;
+/**
+ * Si al agotar el margen de subida el reloj sigue ahí, no se da el envío por
+ * perdido: se sigue mirando el hilo este tiempo extra. En producción, con fotos
+ * de 1,7 MB, el post llegaba al canal DESPUÉS de que el verificador se rindiera
+ * y el job quedaba failed estando publicado.
+ */
+const LATE_DELIVERY_GRACE_MS = 180_000;
 
 /**
  * Verifica el resultado tras pulsar Send, SIN depender solo de los ticks
@@ -953,9 +960,26 @@ async function verifyAfterSend(
     }
     await page.waitForTimeout(2000);
   }
-  // Timeout con pendientes → no podemos afirmar que terminó.
+  // Timeout con pendientes: prórroga antes de rendirse (ver LATE_DELIVERY_GRACE_MS).
+  logger.warn({ timeoutMs: total, graceMs: LATE_DELIVERY_GRACE_MS }, 'upload did not clear pending within timeout — waiting for a late delivery');
+  const graceDeadline = Date.now() + LATE_DELIVERY_GRACE_MS;
+  while (Date.now() < graceDeadline) {
+    if ((await page.locator(failedSelector).count().catch(() => 0)) > failedBeforeSend) {
+      observed.uploadPendingCleared = false;
+      logger.warn({ failedBeforeSend }, 'error icon appeared during the late-delivery grace');
+      return observed;
+    }
+    if ((await page.locator(indicatorSelector).count().catch(() => 0)) > indicatorsBeforeSend) {
+      observed.indicatorAppeared = true;
+      observed.uploadPendingCleared = true;
+      logger.info({ elapsedMs: Date.now() - startedAt }, 'late delivery confirmed (delivered tick appeared after the upload timeout)');
+      return observed;
+    }
+    await page.waitForTimeout(2000);
+  }
+  // Ni tick ni error: no podemos afirmar que terminó.
   observed.uploadPendingCleared = 'unknown';
-  logger.warn({ timeoutMs: total }, 'upload did not clear pending within timeout');
+  logger.warn({ timeoutMs: total, graceMs: LATE_DELIVERY_GRACE_MS }, 'no delivered tick after the grace period');
   return observed;
 }
 
