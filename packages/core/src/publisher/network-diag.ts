@@ -12,6 +12,13 @@ import type { Page } from 'playwright';
 
 const MAX_EVENTS = 25;
 const WA_HOST = /(^|\.)(whatsapp\.net|whatsapp\.com|wa\.me)$/i;
+/**
+ * Ruido habitual de WhatsApp Web que aparece también en envíos correctos:
+ * el reporte de crashlogs (400) y los sprites de emojis, que el propio cliente
+ * aborta al cambiar de chat. Si no se filtran tapan los fallos reales.
+ */
+const NOISE_HOST = /^crashlogs\./i;
+const NOISE_PATH = /^\/emoji\//;
 
 export interface NetworkDiagnostics {
   /** Eventos recogidos (únicos, en orden de aparición). */
@@ -26,6 +33,7 @@ function describeUrl(rawUrl: string): { host: string; path: string } | null {
   try {
     const u = new URL(rawUrl);
     if (!WA_HOST.test(u.hostname)) return null;
+    if (NOISE_HOST.test(u.hostname) || NOISE_PATH.test(u.pathname)) return null;
     return { host: u.hostname, path: u.pathname.replace(/[A-Za-z0-9_-]{24,}/g, '…') };
   } catch {
     return null;

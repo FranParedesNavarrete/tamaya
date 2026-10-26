@@ -108,7 +108,9 @@ const TIMEOUTS: Record<MediaKind, { preview: TimeoutSpec; upload: TimeoutSpec }>
 } = {
   image: {
     preview: { baseMs: 25_000, perMbMs: 500, maxMs: 120_000 },
-    upload: { baseMs: 60_000, perMbMs: 1_500, maxMs: 300_000 },
+    // La base cubre una subida lenta: con 1,7 MB el reloj estuvo >60 s en
+    // producción (el post sí llegó) y un margen de 62 s lo daba por fallido.
+    upload: { baseMs: 180_000, perMbMs: 6_000, maxMs: 600_000 },
   },
   video: {
     // Preview: WA Web tiene que decodificar el container y sacar el primer frame.
