@@ -1,0 +1,19 @@
+# Override SOLO PARA PRODUCCIÓN: conecta la API a la red de n8n para que pueda
+# llamar al webhook de notificaciones por nombre de contenedor
+# (N8N_BASE_URL=http://n8n_autoritas:5678), sin salir a internet.
+#
+# No se carga por defecto (en local no existe esa red). Se activa en el .env del
+# servidor con:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.n8n.yml
+#
+# `proxy` es la red que n8n ya comparte con el nginx. Si prefieres una red
+# dedicada, créala, añádela al servicio n8n y pon su nombre en N8N_DOCKER_NETWORK.
+services:
+  api:
+    networks:
+      proxy: {}
+
+networks:
+  proxy:
+    name: ${N8N_DOCKER_NETWORK:-proxy}
+    external: true
