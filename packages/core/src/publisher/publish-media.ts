@@ -27,6 +27,7 @@ import {
   waitForAny,
 } from '../browser/dom-helpers.js';
 import { logger } from '../logger.js';
+import { readNewMessageStatus, snapshotMessageIds } from './thread-status.js';
 import { navigateToChannel } from './publish-text.js';
 import { startNetworkDiagnostics, type NetworkDiagnostics } from './network-diag.js';
 import {
@@ -208,6 +209,8 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
     // Fallos que YA había en el hilo (p.ej. un envío anterior atascado): solo
     // cuenta como fallo de ESTE envío un icono de error nuevo.
     const failedBeforeSend = await countFailed(page);
+    // Ids de las filas que ya hay: el mensaje de ESTE envío es la fila que no esté aquí.
+    const messageIdsBeforeSend = await snapshotMessageIds(page, THREAD_SCOPE);
 
     // ---- PUNTO DE NO RETORNO: a partir de aquí, el contenido puede haberse
     // publicado, así que un fallo NO debe reintentarse automáticamente. ----
@@ -221,6 +224,7 @@ export async function publishMedia(input: PublishMediaInput): Promise<PublishRes
       threadMarkersBeforeSend,
       indicatorsBeforeSend,
       failedBeforeSend,
+      messageIdsBeforeSend,
     });
 
     const { result, reason } = decideResult(expected, observed);
@@ -835,9 +839,10 @@ async function verifyAfterSend(
     threadMarkersBeforeSend: number;
     indicatorsBeforeSend: number;
     failedBeforeSend: number;
+    messageIdsBeforeSend: string[];
   },
 ): Promise<VerificationObserved> {
-  const { kind, sizeMb, body, threadMarkersBeforeSend, indicatorsBeforeSend, failedBeforeSend } = opts;
+  const { kind, sizeMb, body, threadMarkersBeforeSend, indicatorsBeforeSend, failedBeforeSend, messageIdsBeforeSend } = opts;
   const total = scaledTimeout(TIMEOUTS[kind].upload, sizeMb);
   const startedAt = Date.now();
   const overallDeadline = startedAt + total;
@@ -880,6 +885,14 @@ async function verifyAfterSend(
   const failedSelector = (await scopedSelectors(page, FAILED_INNER)).join(', ');
   const indicatorDeadline = Date.now() + 15_000;
   while (Date.now() < indicatorDeadline) {
+    // Si ya se ve la fila del mensaje nuevo, su propio estado manda (los iconos
+    // de mensajes antiguos del hilo no cuentan).
+    const own = await readNewMessageStatus(page, THREAD_SCOPE, messageIdsBeforeSend);
+    if (own) {
+      observed.threadItemAppeared = true;
+      if (own.delivered && !own.failed) observed.indicatorAppeared = true;
+      break;
+    }
     // Comparado contra la línea base de ANTES de enviar. Antes bastaba con que
     // hubiera algún tick en el hilo (`> 0`), y en un canal con publicaciones
     // previas eso es cierto siempre: `indicatorAppeared` salía true sin haber
@@ -913,7 +926,37 @@ async function verifyAfterSend(
   }
   observed.mediaDetected = await detectMediaInLastItems(page, 5);
 
-  // 4) Esperar a que no queden pendientes (msg-time) ni fallos (msg-failed).
+  // 4a) Con la fila del mensaje nuevo identificada, se espera SU estado: entregado
+  // (tick), fallido (icono rojo) o nada hasta agotar el margen. Es lo que hay que
+  // mirar: el estado global del hilo lo contaminan mensajes antiguos atascados.
+  if ((await readNewMessageStatus(page, THREAD_SCOPE, messageIdsBeforeSend)) !== null) {
+    const ownDeadline = overallDeadline + LATE_DELIVERY_GRACE_MS;
+    let lastOwnLog = Date.now();
+    while (Date.now() < ownDeadline) {
+      const own = await readNewMessageStatus(page, THREAD_SCOPE, messageIdsBeforeSend);
+      if (own?.failed) {
+        observed.uploadPendingCleared = false;
+        logger.warn({ elapsedMs: Date.now() - startedAt }, 'WhatsApp marked THIS message as failed (error icon in its own row)');
+        return observed;
+      }
+      if (own?.delivered) {
+        observed.indicatorAppeared = true;
+        observed.uploadPendingCleared = true;
+        logger.info({ elapsedMs: Date.now() - startedAt, deliveredTick: true }, 'upload completed — own message delivered');
+        return observed;
+      }
+      if (Date.now() - lastOwnLog > 10_000) {
+        logger.info({ pending: own?.pending ?? null, remainingSec: Math.round((ownDeadline - Date.now()) / 1000) }, 'own message not delivered yet');
+        lastOwnLog = Date.now();
+      }
+      await page.waitForTimeout(1500);
+    }
+    observed.uploadPendingCleared = 'unknown';
+    logger.warn({ timeoutMs: total, graceMs: LATE_DELIVERY_GRACE_MS }, 'own message not delivered within the timeout');
+    return observed;
+  }
+
+  // 4b) Sin fila identificada (no debería pasar): lógica antigua por conteo global.
   let lastLog = Date.now();
   while (Date.now() < overallDeadline) {
     const [pending, failed] = await Promise.all([
