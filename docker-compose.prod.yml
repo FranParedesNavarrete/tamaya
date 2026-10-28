@@ -1,0 +1,30 @@
+# Override SOLO PARA PRODUCCIÓN: la API corre compilada (`node dist/server.js`)
+# en vez de con `tsx watch`.
+#
+# Por qué: con el watcher, si el proceso de la API moría (excepción sin
+# capturar) el contenedor seguía "Up" porque el watcher seguía vivo esperando
+# cambios de ficheros, pero nadie escuchaba en el puerto. Ahora el proceso de la
+# API es el principal del contenedor: si muere, el contenedor cae y
+# `restart: unless-stopped` lo levanta solo.
+#
+# No se carga por defecto. Se activa en el .env del servidor con:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.n8n.yml:docker-compose.prod.yml
+# (requiere Docker Compose >= 2.24 por el `!override`).
+services:
+  api:
+    build:
+      target: runtime
+    # Los bind mounts (logs, media) son de root en el host; la imagen runtime
+    # usa USER node y no podría escribir en ellos.
+    user: root
+    command: ["node", "apps/api/dist/server.js"]
+    # Sin montar el código fuente: se usa el compilado de la imagen.
+    volumes: !override
+      - ${TAMAYA_TMP_DIR}:${TAMAYA_TMP_DIR}
+      - ./logs/api:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${API_PORT}/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

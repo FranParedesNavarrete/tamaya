@@ -19,8 +19,9 @@ COPY apps/api/package.json apps/api/
 COPY packages ./packages/
 RUN npm ci
 COPY apps/api ./apps/api/
-RUN npm run build -w packages/db
+# shared-types primero: packages/db lo importa.
 RUN npm run build -w packages/shared-types
+RUN npm run build -w packages/db
 RUN npm run build -w apps/api
 
 # --- runtime ---
