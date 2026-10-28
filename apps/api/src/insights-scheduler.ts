@@ -66,7 +66,13 @@ async function tick(): Promise<void> {
 
 /** Arranca el scheduler. Devuelve una función para pararlo (shutdown). */
 export function startInsightsScheduler(): () => void {
-  const interval = setInterval(() => { void tick(); }, TICK_MS);
+  // Un fallo transitorio (DNS/BD caída) no debe tumbar la API: se registra y se
+  // reintenta en el siguiente tick.
+  const interval = setInterval(() => {
+    tick().catch((err) => {
+      logger.error({ err: err instanceof Error ? err.message : String(err) }, 'insights auto-capture: tick fallido');
+    });
+  }, TICK_MS);
   logger.info('insights auto-capture scheduler started');
   return () => clearInterval(interval);
 }

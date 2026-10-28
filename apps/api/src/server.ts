@@ -164,6 +164,12 @@ async function main() {
   process.on('SIGINT', shutdown);
 }
 
+// Red de seguridad: un rechazo sin capturar (p. ej. DNS/BD caída un instante en
+// una tarea periódica) no debe tumbar la API; se registra y sigue.
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandledRejection (la API sigue en marcha):', reason);
+});
+
 main().catch((err) => {
   console.error(err);
   process.exit(1);
