@@ -1,26 +1,38 @@
-# Override SOLO PARA PRODUCCIÓN: la API corre compilada (`node dist/server.js`)
-# en vez de con `tsx watch`.
+# Override SOLO PARA PRODUCCIÓN: API y worker-resolve corren compilados y SIN root.
 #
-# Por qué: con el watcher, si el proceso de la API moría (excepción sin
-# capturar) el contenedor seguía "Up" porque el watcher seguía vivo esperando
-# cambios de ficheros, pero nadie escuchaba en el puerto. Ahora el proceso de la
-# API es el principal del contenedor: si muere, el contenedor cae y
-# `restart: unless-stopped` lo levanta solo.
+# - Compilados (`node dist/...`) en vez de `tsx watch`: si el proceso muere, el
+#   contenedor cae y `restart: unless-stopped` lo levanta. Con el watcher el
+#   contenedor seguía "Up" sin nadie escuchando.
+# - Como usuario `node` (uid 1000), el de las imágenes runtime. Los directorios
+#   del host que montan (media y logs de la API) los pone a uid 1000 el servicio
+#   `fix-perms` antes de arrancar, de forma idempotente.
 #
 # No se carga por defecto. Se activa en el .env del servidor con:
 #   COMPOSE_FILE=docker-compose.yml:docker-compose.n8n.yml:docker-compose.prod.yml
 # (requiere Docker Compose >= 2.24 por el `!override`).
 services:
+  # Init de un solo uso: único paso como root, sin red y montando solo estos dos
+  # directorios. worker-publish (nativo, root) sigue pudiendo leer la media.
+  fix-perms:
+    image: node:24-alpine
+    user: root
+    network_mode: none
+    restart: "no"
+    command: ["sh", "-c", "chown -R 1000:1000 /perm/media /perm/logs"]
+    volumes:
+      - ${TAMAYA_TMP_DIR}:/perm/media
+      - ./logs/api:/perm/logs
+
   api:
     build:
       target: runtime
-    # Los bind mounts (logs, media) son de root en el host; la imagen runtime
-    # usa USER node y no podría escribir en ellos.
-    user: root
     command: ["node", "apps/api/dist/server.js"]
     environment:
       # La API se niega a arrancar sin TAMAYA_API_TOKEN (>= 32 caracteres).
       TAMAYA_REQUIRE_ENV_TOKEN: "true"
+    depends_on:
+      fix-perms:
+        condition: service_completed_successfully
     # Sin montar el código fuente: se usa el compilado de la imagen.
     volumes: !override
       - ${TAMAYA_TMP_DIR}:${TAMAYA_TMP_DIR}
@@ -31,3 +43,13 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
+  worker-resolve:
+    build:
+      target: runtime
+    command: ["node", "apps/worker-resolve/dist/index.js"]
+    depends_on:
+      fix-perms:
+        condition: service_completed_successfully
+    volumes: !override
+      - ${TAMAYA_TMP_DIR}:${TAMAYA_TMP_DIR}
