@@ -10,7 +10,6 @@ import {
   type SelectorOverrides,
 } from '@tamaya/shared-types';
 import {
-  isApiTokenConfigured,
   generateAndStoreApiToken,
   getSelectorOverrides,
   setSelectorOverrides,
@@ -19,6 +18,7 @@ import {
   getInsightsAutoCaptureConfig,
   setInsightsAutoCaptureConfig,
 } from '../settings/store.js';
+import { describeTokenSource, getAuthConfig } from '../auth.js';
 import { controlFetch, ControlUnavailableError } from '../control-client.js';
 
 /** Merge defaults + overrides → selectores efectivos (solo claves editables). */
@@ -35,8 +35,10 @@ function effectiveSelectors(overrides: SelectorOverrides): Record<EditableSelect
  * Endpoints de configuración de la aplicación.
  *
  *  Seguridad API (Iteración 1):
- *    GET  /settings/security             → { apiTokenConfigured }  (público)
- *    POST /settings/security/api-token   → genera/rota el token
+ *    GET  /settings/security             → { apiTokenConfigured, apiTokenSource }  (público)
+ *    POST /settings/security/api-token   → genera/rota el token (solo desarrollo
+ *                                          con TAMAYA_DEV_TOKEN_BOOTSTRAP; 409 si
+ *                                          el token viene del entorno)
  *
  *  WhatsApp (proxy al control server nativo, Iteración 2):
  *    GET  /settings/whatsapp/status
@@ -56,11 +58,17 @@ export async function settingsRoutes(app: FastifyInstance) {
   const a = app.withTypeProvider<ZodTypeProvider>();
 
   // ---------- Seguridad API ----------
-  a.get('/security', async () => {
-    return { apiTokenConfigured: await isApiTokenConfigured() };
-  });
+  a.get('/security', async () => describeTokenSource());
 
-  a.post('/security/api-token', async () => {
+  a.post('/security/api-token', async (_req, reply) => {
+    // Con el token en el entorno (producción) no se genera ni rota desde la API:
+    // se cambia TAMAYA_API_TOKEN en el .env y se reinicia.
+    if (getAuthConfig().mode !== 'stored') {
+      return reply.code(409).send({
+        error: 'El API token se gestiona con la variable de entorno TAMAYA_API_TOKEN.',
+        code: 'API_TOKEN_MANAGED_BY_ENV',
+      });
+    }
     const token = await generateAndStoreApiToken();
     return { token, shownOnce: true };
   });

@@ -13,6 +13,7 @@ import { statsRoutes } from './routes/stats.js';
 import { settingsRoutes } from './routes/settings.js';
 import { opsRoutes } from './routes/ops.js';
 import { registerAuth } from './auth.js';
+import { AuthConfigError, resolveAuthConfig } from './auth-config.js';
 import { closeQueue } from './queue/bullmq.js';
 import { startInsightsScheduler } from './insights-scheduler.js';
 import { startAlertWatchdog } from './alerts/watchdog.js';
@@ -84,6 +85,19 @@ const INSIGHTS_DOCS: Record<string, { summary: string; description: string }> = 
 };
 
 async function main() {
+  // Antes de abrir nada: si la configuración de auth es insegura o incompleta
+  // (p. ej. producción sin TAMAYA_API_TOKEN) la API no arranca.
+  let authConfig;
+  try {
+    authConfig = resolveAuthConfig(process.env);
+  } catch (err) {
+    if (err instanceof AuthConfigError) {
+      console.error(`[tamaya-api] configuración de seguridad inválida: ${err.message}`);
+      process.exit(1);
+    }
+    throw err;
+  }
+
   const app = Fastify({ logger: buildLoggerConfig() }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
@@ -130,8 +144,9 @@ async function main() {
   });
 
   // Guard de autenticación por Bearer token. /health y GET /settings/security
-  // y /docs quedan públicos; el resto exige token una vez configurado (ver auth.ts).
-  registerAuth(app);
+  // son públicas; /docs solo si TAMAYA_DOCS_ENABLED=true; el resto exige token
+  // (ver auth.ts y auth-config.ts).
+  registerAuth(app, authConfig);
 
   app.get('/health', async () => ({ ok: true, ts: new Date().toISOString() }));
 

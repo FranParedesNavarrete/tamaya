@@ -505,45 +505,50 @@ Si los cuatro pasan, programa un job de texto desde la UI y mira `pm2 logs tamay
 
 ## Seguridad API (Bearer token)
 
-La API se puede proteger con un token Bearer. Comportamiento:
+La API exige un token Bearer que se define con la variable de entorno
+**`TAMAYA_API_TOKEN`**. Comportamiento:
 
-- **Sin token configurado** → la API está abierta (permite el bootstrap y el
-  primer arranque). `/health` siempre es público.
-- **Con token configurado** → todos los endpoints exigen token, salvo
-  `GET /health` y `GET /settings/security`. Sin token válido devuelven `401`.
+- Todos los endpoints exigen token, salvo `GET /health` y
+  `GET /settings/security` (solo informa del estado, sin secretos). Sin token
+  válido devuelven `401`. La comparación es en tiempo constante.
+- **Producción** (`NODE_ENV=production` o `TAMAYA_REQUIRE_ENV_TOKEN=true`): la
+  API **no arranca** si falta `TAMAYA_API_TOKEN` o tiene menos de 32
+  caracteres, ni si `API_AUTH_DISABLED=true`. No existe la API abierta.
+- **`/docs`** (Swagger UI y `/docs/json`) es público solo si
+  `TAMAYA_DOCS_ENABLED=true` (por defecto en desarrollo). En producción exige
+  token; la página «API» de la web lo envía sola.
+
+| Variable | Para qué |
+| --- | --- |
+| `TAMAYA_API_TOKEN` | Token de la API (`openssl rand -hex 32`). Obligatorio en producción. |
+| `TAMAYA_REQUIRE_ENV_TOKEN` | `true` aplica las reglas de producción sin `NODE_ENV=production`. |
+| `TAMAYA_DOCS_ENABLED` | `/docs` público sin token (por defecto: sí en dev, no en producción). |
+| `TAMAYA_ALLOW_STORED_TOKEN` | Transitorio: acepta además el token antiguo guardado en BD. |
+| `TAMAYA_DEV_TOKEN_BOOTSTRAP` | Solo dev: flujo antiguo de generar el token desde Ajustes. |
 
 ### Levantar en local
 
 ```bash
+cp .env.example .env     # y define TAMAYA_API_TOKEN, o TAMAYA_DEV_TOKEN_BOOTSTRAP=true
 docker compose up -d --build
 # App web:  http://localhost:${WEB_PORT}   (por defecto 5173)
 # API:      http://localhost:3001
 ```
 
-### Generar el token desde Ajustes
+### Token en la web
 
-1. Abre la web → **Ajustes** (icono en la navbar).
-2. Sección **Seguridad API** → **Generar primer token**.
-3. Copia el token: **solo se muestra una vez**. Se guarda automáticamente en
-   este navegador (`localStorage: tamaya_api_token`) para que la UI siga
-   llamando a la API.
-4. Para **rotar**, pulsa *Rotar token* (pide confirmación). El token anterior
-   queda invalidado.
+Con el token en el entorno, **Ajustes → Seguridad API** ya no genera ni rota
+nada (la API responde `409`): pega ahí el valor de `TAMAYA_API_TOKEN` una vez por
+navegador (se guarda en `localStorage: tamaya_api_token`).
 
-Solo se persiste el **hash** del token (SHA-256) en la tabla `app_settings`;
-el token plano nunca se almacena.
+### Rotar el token
 
-### Generar el token por API (sin UI)
+1. Cambia `TAMAYA_API_TOKEN` en el `.env` del servidor y reinicia la API
+   (`docker compose up -d api`).
+2. Actualiza los clientes: web (Ajustes), VISTA, n8n…
 
-```bash
-# Solo funciona mientras NO haya token configurado (bootstrap):
-curl -sX POST http://localhost:3001/settings/security/api-token
-# → {"token":"tamaya_xxxxxxxx...","shownOnce":true}
-
-# Estado (público):
-curl -s http://localhost:3001/settings/security
-# → {"apiTokenConfigured":true}
-```
+Solo en desarrollo con `TAMAYA_DEV_TOKEN_BOOTSTRAP=true` se puede generar el
+token desde Ajustes (se guarda su hash SHA-256 en `app_settings`).
 
 ### Llamar a la API con token
 
@@ -557,7 +562,7 @@ curl -i -H "Authorization: Bearer tamaya_xxxxxxxx..." http://localhost:3001/jobs
 ```
 
 > **Desarrollo:** `API_AUTH_DISABLED=true` en `.env` desactiva el guard por
-> completo. **No usar en producción.**
+> completo. En producción la API se niega a arrancar con esa variable.
 
 ### Nota Ubuntu Server / headless
 

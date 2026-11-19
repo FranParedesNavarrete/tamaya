@@ -78,6 +78,12 @@ services:
       API_PORT: ${API_PORT}
       API_CORS_ORIGIN: ${API_CORS_ORIGIN}
       API_AUTH_DISABLED: ${API_AUTH_DISABLED:-false}
+      # Autenticación (ver .env.example). En producción TAMAYA_API_TOKEN es obligatorio.
+      TAMAYA_API_TOKEN: ${TAMAYA_API_TOKEN:-}
+      TAMAYA_REQUIRE_ENV_TOKEN: ${TAMAYA_REQUIRE_ENV_TOKEN:-}
+      TAMAYA_ALLOW_STORED_TOKEN: ${TAMAYA_ALLOW_STORED_TOKEN:-}
+      TAMAYA_DOCS_ENABLED: ${TAMAYA_DOCS_ENABLED:-}
+      TAMAYA_DEV_TOKEN_BOOTSTRAP: ${TAMAYA_DEV_TOKEN_BOOTSTRAP:-}
       # URL del control server nativo de worker-publish (fuera de Docker).
       # host.docker.internal apunta al host. En Linux, ver extra_hosts abajo.
       TAMAYA_CONTROL_URL: ${TAMAYA_CONTROL_URL:-http://host.docker.internal:3010}

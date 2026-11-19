@@ -20,6 +20,8 @@ import {
 
 export function Settings() {
   const [configured, setConfigured] = useState<boolean | null>(null);
+  // 'env': el token lo fija el servidor con TAMAYA_API_TOKEN (no se genera aquí).
+  const [managedByEnv, setManagedByEnv] = useState(false);
   const [localToken, setLocalToken] = useState<string | null>(getStoredToken());
   const [generatedToken, setGeneratedToken] = useState<string | null>(null);
   const [pasteToken, setPasteToken] = useState('');
@@ -32,6 +34,7 @@ export function Settings() {
     try {
       const s = await api.getSecurity();
       setConfigured(s.apiTokenConfigured);
+      setManagedByEnv(s.apiTokenSource === 'env');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -146,7 +149,14 @@ export function Settings() {
             </div>
           )}
 
-          {/* Generar / rotar */}
+          {/* Generar / rotar (solo si el token no viene del entorno del servidor) */}
+          {managedByEnv && (
+            <p className="text-xs text-muted-foreground">
+              El token lo define el servidor con <code>TAMAYA_API_TOKEN</code> (.env). Para
+              cambiarlo, edita esa variable y reinicia la API; después pega aquí el nuevo valor.
+            </p>
+          )}
+          {!managedByEnv && (
           <div className="flex flex-wrap items-center gap-2">
             <Button onClick={onGenerateClick}>
               <KeyRound className="h-4 w-4 mr-1" />
@@ -158,6 +168,7 @@ export function Settings() {
               </span>
             )}
           </div>
+          )}
 
           {/* Token local (cliente) */}
           <div className="border-t pt-4 space-y-3">

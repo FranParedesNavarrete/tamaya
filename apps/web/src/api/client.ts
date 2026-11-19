@@ -308,7 +308,8 @@ export const api = {
   },
 
   // Settings — seguridad API
-  getSecurity: () => req<{ apiTokenConfigured: boolean }>('/settings/security'),
+  getSecurity: () =>
+    req<{ apiTokenConfigured: boolean; apiTokenSource?: 'env' | 'stored' | 'none' }>('/settings/security'),
   generateApiToken: () =>
     req<{ token: string; shownOnce: boolean }>('/settings/security/api-token', {
       method: 'POST',
