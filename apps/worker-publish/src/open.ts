@@ -15,7 +15,9 @@
 import { config as loadEnv } from 'dotenv';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-loadEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../../.env') });
+// TAMAYA_ENV_FILE: fichero de variables propio (p. ej. /etc/tamaya/worker-publish.env) para
+// correr sin acceso al .env completo del repo; por defecto, el .env del repo.
+loadEnv({ path: process.env.TAMAYA_ENV_FILE || resolve(dirname(fileURLToPath(import.meta.url)), '../../../.env') });
 
 import { launchPersistentContextForTenant } from '@tamaya/core';
 import pino from 'pino';

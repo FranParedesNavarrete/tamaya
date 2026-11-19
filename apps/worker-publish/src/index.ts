@@ -2,7 +2,9 @@ import { config as loadEnv } from 'dotenv';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // Carga .env del repo raíz — 3 niveles arriba desde dist/index.js o src/index.ts
-loadEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../../.env') });
+// TAMAYA_ENV_FILE: fichero de variables propio (p. ej. /etc/tamaya/worker-publish.env) para
+// correr sin acceso al .env completo del repo; por defecto, el .env del repo.
+loadEnv({ path: process.env.TAMAYA_ENV_FILE || resolve(dirname(fileURLToPath(import.meta.url)), '../../../.env') });
 
 import { Queue, Worker } from 'bullmq';
 import { Redis } from 'ioredis';

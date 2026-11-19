@@ -12,7 +12,8 @@
 # (requiere Docker Compose >= 2.24 por el `!override`).
 services:
   # Init de un solo uso: único paso como root, sin red y montando solo estos dos
-  # directorios. worker-publish (nativo, root) sigue pudiendo leer la media.
+  # directorios. worker-publish (nativo, con su propio usuario;
+  # ver README) lee la media (modo 755).
   fix-perms:
     image: node:24-alpine
     user: root

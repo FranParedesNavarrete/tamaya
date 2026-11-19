@@ -17,6 +17,8 @@ module.exports = {
       kill_timeout: 180000,
       env: {
         NODE_ENV: 'production',
+        // Si se define al hacer `pm2 start`, los procesos leen ese fichero en vez del .env del repo.
+        ...(process.env.TAMAYA_ENV_FILE ? { TAMAYA_ENV_FILE: process.env.TAMAYA_ENV_FILE } : {}),
       },
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
       out_file: './logs/out.log',
@@ -38,6 +40,8 @@ module.exports = {
       max_memory_restart: '1G',
       env: {
         NODE_ENV: 'production',
+        // Si se define al hacer `pm2 start`, los procesos leen ese fichero en vez del .env del repo.
+        ...(process.env.TAMAYA_ENV_FILE ? { TAMAYA_ENV_FILE: process.env.TAMAYA_ENV_FILE } : {}),
       },
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
       out_file: './logs/control-out.log',

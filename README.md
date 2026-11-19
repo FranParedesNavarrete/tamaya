@@ -431,20 +431,89 @@ de `fix-perms`.
 
 #### worker-publish con un usuario sin privilegios
 
-`worker-publish` y el control server pilotan Chromium con la sesión de WhatsApp:
-conviene que corran con un usuario dedicado, **no** como root.
+`worker-publish` y el control server pilotan Chromium con la sesión de WhatsApp
+y alcanzan la BD y Redis: no deben correr como root. Se ejecutan con un usuario
+de sistema dedicado (`tamaya`), **sin** sudo ni grupo `docker`, que solo ve:
 
-- Crea un usuario de sistema (p. ej. `tamaya`) y arranca pm2 con él
-  (`pm2 startup systemd -u tamaya --hp /home/tamaya`).
-- Los navegadores de Playwright se instalan por usuario (`~/.cache/ms-playwright`):
-  ejecuta `npx playwright install chromium` como ese usuario.
-- El directorio del perfil (`apps/worker-publish/sessions/`) y `logs/` deben
-  pertenecer a ese usuario. El worker fija el perfil de Chromium a modo `0700`
-  al abrirlo; si lo creaste a mano: `chmod 700 apps/worker-publish/sessions`.
-- Lee la media de `TAMAYA_TMP_DIR` (modo `755`) y escribe en el log de pm2.
-- Migrar un servidor que hoy corre como root: para pm2 **sin envíos en curso**
-  (reiniciar a mitad de un envío puede corromper el perfil), haz `chown -R` de
-  `sessions/` y `logs/` al nuevo usuario y vuelve a arrancar.
+- el código del repo (lectura),
+- `apps/worker-publish/{sessions,debug,logs}` (escritura; `sessions` en modo 0700),
+- la media de `TAMAYA_TMP_DIR` (lectura),
+- `/etc/tamaya/worker-publish.env` (variables mínimas: BD, Redis, token del
+  control server y ajustes del publicador; **sin** claves de AWS, token de la
+  API ni alertas). Se genera con `scripts/publisher-env.sh`.
+
+Los procesos leen ese fichero gracias a `TAMAYA_ENV_FILE` (por defecto siguen
+usando el `.env` del repo, así que en local no cambia nada).
+
+##### Migrar un servidor que hoy corre como root
+
+Hazlo en una ventana tranquila y con el móvil a mano (si WhatsApp pidiera
+revincular, hay que escanear el QR otra vez). **Antes**, solo lectura:
+
+```bash
+cd /home/autoritas/projects/clippea/tamaya
+namei -m "$PWD/apps/worker-publish/dist/index.js"   # ¿el nuevo usuario puede atravesar /home/<tu_usuario>?
+which node; readlink -f "$(which node)"             # node NO debe estar bajo /root ni en un nvm privado
+ls -ld apps/worker-publish/{sessions,debug,logs}    # anota los propietarios actuales (para volver atrás)
+pm2 jlist | grep -o '"name":"[^"]*"'                # el pm2 de root puede tener otras apps: no se tocan
+grep -E '^TAMAYA_HEADLESS=' .env; pm2 env 1 | grep -E '^DISPLAY'   # ¿headless o pantalla virtual?
+```
+
+1. **Sin envíos en curso:** ningún job en `publishing` (la API, `GET /jobs`).
+2. **Usuario y acceso al repo:**
+   ```bash
+   sudo useradd --system --create-home --home-dir /home/tamaya --shell /usr/sbin/nologin tamaya
+   # Solo si `namei` mostró que /home/<usuario> es 750: permitir atravesar (no leer)
+   sudo setfacl -m u:tamaya:x /home/autoritas
+   ```
+3. **Variables mínimas:** `sudo ./scripts/publisher-env.sh` (lista las claves, no los valores).
+   Revisa que salgan `DATABASE_URL` y `REDIS_URL`.
+4. **Navegador de Playwright para ese usuario** (los de root no sirven):
+   ```bash
+   sudo runuser -u tamaya -- env HOME=/home/tamaya \
+     "$PWD/node_modules/.bin/playwright" install chromium
+   ```
+5. **Parar los procesos de root** (solo estos dos; espera a que `pm2 stop` termine,
+   puede tardar hasta 3 min si había un envío) y quitarlos de root:
+   ```bash
+   pm2 stop tamaya-worker-publish tamaya-worker-control
+   pm2 delete tamaya-worker-publish tamaya-worker-control && pm2 save
+   ```
+6. **Propietario de lo que escribe** (la sesión de WhatsApp no sale del servidor):
+   ```bash
+   sudo chown -R tamaya:tamaya apps/worker-publish/{sessions,debug,logs}
+   sudo chmod 700 apps/worker-publish/sessions
+   ```
+7. **Arrancar como `tamaya`** y que arranque con el sistema:
+   ```bash
+   ./scripts/pm2-publisher.sh start ecosystem.config.cjs
+   ./scripts/pm2-publisher.sh save
+   sudo env PATH="$PATH" "$PWD/node_modules/.bin/pm2" startup systemd -u tamaya --hp /home/tamaya
+   ```
+8. **Despliegues:** en `down_github.sh` sustituye las líneas de pm2
+   (`npm run native:restart` y `native:save`) por
+   `./scripts/pm2-publisher.sh restart tamaya-worker-publish tamaya-worker-control`
+   y `./scripts/pm2-publisher.sh save`.
+
+**Verificar:**
+
+```bash
+ps -o user=,cmd= -p "$(pgrep -f worker-publish/dist/index.js | head -1)"   # tamaya
+ps -o user= -C chrome,chromium | sort -u                                   # tamaya
+sudo runuser -u tamaya -- cat "$PWD/.env"          # Permission denied
+sudo runuser -u tamaya -- docker ps                # permission denied
+sudo runuser -u tamaya -- id                       # sin sudo ni docker
+stat -c '%U %a %n' apps/worker-publish/sessions    # tamaya 700
+```
+
+Después, Ajustes → WhatsApp debe seguir mostrando la sesión iniciada y el
+siguiente job debe pasar a `sent` verificado; busca `EACCES` en
+`apps/worker-publish/logs/*.log`.
+
+**Volver atrás:** `./scripts/pm2-publisher.sh stop tamaya-worker-publish tamaya-worker-control`,
+`sudo chown -R <propietarios anotados> apps/worker-publish/{sessions,debug,logs}`,
+y como root `cd apps/worker-publish && pm2 start ecosystem.config.cjs && pm2 save`
+(sin `TAMAYA_ENV_FILE` vuelve a leer el `.env` del repo).
 
 ### D. Firewall / acceso externo
 
