@@ -420,6 +420,32 @@ pm2 save                     # graba la lista actual de procesos
 
 A partir de aquí, el `worker-publish` arranca solo en cada reboot.
 
+#### Contenedores sin root en producción
+
+`docker-compose.prod.yml` hace que la API y `worker-resolve` corran compilados y
+como `node` (uid 1000), no como root. Los directorios del host que montan
+(`TAMAYA_TMP_DIR` y `logs/api`) los deja con ese propietario el servicio de un
+solo uso `fix-perms` antes de cada arranque (idempotente). `worker-publish`
+nativo sigue pudiendo leer la media. Si usas otro uid de host, ajusta el `chown`
+de `fix-perms`.
+
+#### worker-publish con un usuario sin privilegios
+
+`worker-publish` y el control server pilotan Chromium con la sesión de WhatsApp:
+conviene que corran con un usuario dedicado, **no** como root.
+
+- Crea un usuario de sistema (p. ej. `tamaya`) y arranca pm2 con él
+  (`pm2 startup systemd -u tamaya --hp /home/tamaya`).
+- Los navegadores de Playwright se instalan por usuario (`~/.cache/ms-playwright`):
+  ejecuta `npx playwright install chromium` como ese usuario.
+- El directorio del perfil (`apps/worker-publish/sessions/`) y `logs/` deben
+  pertenecer a ese usuario. El worker fija el perfil de Chromium a modo `0700`
+  al abrirlo; si lo creaste a mano: `chmod 700 apps/worker-publish/sessions`.
+- Lee la media de `TAMAYA_TMP_DIR` (modo `755`) y escribe en el log de pm2.
+- Migrar un servidor que hoy corre como root: para pm2 **sin envíos en curso**
+  (reiniciar a mitad de un envío puede corromper el perfil), haz `chown -R` de
+  `sessions/` y `logs/` al nuevo usuario y vuelve a arrancar.
+
 ### D. Firewall / acceso externo
 
 Por defecto el stack escucha en:

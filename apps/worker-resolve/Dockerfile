@@ -16,9 +16,10 @@ COPY apps/worker-resolve/package.json apps/worker-resolve/
 COPY packages ./packages/
 RUN npm ci
 COPY apps/worker-resolve ./apps/worker-resolve/
+# shared-types primero: db (y media-resolver) lo importan.
+RUN npm run build -w packages/shared-types
 RUN npm run build -w packages/db
 RUN npm run build -w packages/media-resolver
-RUN npm run build -w packages/shared-types
 RUN npm run build -w apps/worker-resolve
 
 FROM node:24-alpine AS runtime

@@ -5,7 +5,7 @@
  * WhatsApp Web guarda sus tokens en IndexedDB, que storageState NO captura.
  * El perfil persistente guarda el userDataDir completo de Chromium.
  */
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import type { BrowserContext } from 'playwright';
 import { chromium } from 'playwright';
 import { config } from '../config.js';
@@ -23,7 +23,9 @@ import { acquireProfileLock, releaseProfileLock, type ProfileLockOwner } from '.
 export async function launchPersistentContextForTenant(
   owner: ProfileLockOwner = 'worker-publish',
 ): Promise<BrowserContext> {
-  mkdirSync(config.userDataDir, { recursive: true });
+  mkdirSync(config.userDataDir, { recursive: true, mode: 0o700 });
+  // El perfil contiene la sesión de WhatsApp: solo el usuario del proceso.
+  try { chmodSync(config.userDataDir, 0o700); } catch { /* no es nuestro: se deja como está */ }
 
   // Lanza ProfileLockedError si otro proceso vivo tiene el perfil.
   acquireProfileLock(owner);
