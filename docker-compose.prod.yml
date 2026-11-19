@@ -18,6 +18,9 @@ services:
     # usa USER node y no podría escribir en ellos.
     user: root
     command: ["node", "apps/api/dist/server.js"]
+    environment:
+      # La API se niega a arrancar sin TAMAYA_API_TOKEN (>= 32 caracteres).
+      TAMAYA_REQUIRE_ENV_TOKEN: "true"
     # Sin montar el código fuente: se usa el compilado de la imagen.
     volumes: !override
       - ${TAMAYA_TMP_DIR}:${TAMAYA_TMP_DIR}

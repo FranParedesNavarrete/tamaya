@@ -1,18 +1,22 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { isApiTokenConfigured, verifyApiToken } from './settings/store.js';
+import type { AuthConfig } from './auth-config.js';
 
 /**
  * Rutas siempre públicas (no requieren token nunca):
  *   - GET /health              → healthcheck / readiness
- *   - GET /settings/security   → estado de configuración ({ apiTokenConfigured })
- *                                No expone ningún secreto, solo un booleano.
- *   - GET /docs, /docs/*       → documentación Swagger UI + spec (el "Authorize"
- *                                de la UI pide el token para probar endpoints)
+ *   - GET /settings/security   → estado de configuración ({ apiTokenConfigured,
+ *                                apiTokenSource }). No expone ningún secreto.
+ *
+ * `/docs` y `/docs/*` (Swagger UI + spec) solo son públicas si
+ * `TAMAYA_DOCS_ENABLED=true` (por defecto en desarrollo); en producción exigen
+ * token como el resto de rutas.
  */
-function isPublicRoute(method: string, path: string): boolean {
+function isPublicRoute(method: string, path: string, docsPublic: boolean): boolean {
   if (path === '/health') return true;
   if (method === 'GET' && path === '/settings/security') return true;
-  if (method === 'GET' && (path === '/docs' || path.startsWith('/docs/'))) return true;
+  if (docsPublic && method === 'GET' && (path === '/docs' || path.startsWith('/docs/'))) return true;
   return false;
 }
 
@@ -28,32 +32,76 @@ function extractToken(req: FastifyRequest): string | null {
   return null;
 }
 
+const sha256 = (s: string) => createHash('sha256').update(s, 'utf8').digest();
+
 /**
- * Registra el guard de autenticación por Bearer token.
- *
- * Comportamiento (ver tarea E del master prompt):
- *   - `API_AUTH_DISABLED=true`  → auth desactivada (SOLO desarrollo).
- *   - Rutas públicas            → siempre permitidas.
- *   - Sin token configurado     → API abierta. Esto permite el bootstrap
- *                                 (generar el primer token) y no bloquea el
- *                                 primer arranque de la app.
- *   - Con token configurado     → todo lo no-público exige token válido
- *                                 (401 si falta o es inválido).
+ * Comparación en tiempo constante. Se comparan los SHA-256 de ambos valores:
+ * siempre miden 32 bytes, así que `timingSafeEqual` no lanza por longitudes
+ * distintas ni se filtra la longitud del token.
  */
-export function registerAuth(app: FastifyInstance): void {
-  const disabled = process.env.API_AUTH_DISABLED === 'true';
-  if (disabled) {
-    app.log.warn('API_AUTH_DISABLED=true — autenticación DESACTIVADA (no usar en producción)');
+export function tokensMatch(provided: string, expected: string): boolean {
+  return timingSafeEqual(sha256(provided), sha256(expected));
+}
+
+/** Acceso al token guardado en BD (inyectable para poder probar sin BD). */
+export interface StoredTokenStore {
+  isConfigured: () => Promise<boolean>;
+  verify: (candidate: string) => Promise<boolean>;
+}
+
+const defaultStore: StoredTokenStore = { isConfigured: isApiTokenConfigured, verify: verifyApiToken };
+
+let current: AuthConfig | null = null;
+
+/** Configuración de auth activa (la fija `registerAuth` al arrancar). */
+export function getAuthConfig(): AuthConfig {
+  if (!current) throw new Error('auth no inicializada');
+  return current;
+}
+
+/** Origen del token que valida la API, para mostrarlo en Ajustes. */
+export async function describeTokenSource(
+  store: StoredTokenStore = defaultStore,
+): Promise<{ apiTokenConfigured: boolean; apiTokenSource: 'env' | 'stored' | 'none' }> {
+  const cfg = getAuthConfig();
+  if (cfg.mode === 'env') return { apiTokenConfigured: true, apiTokenSource: 'env' };
+  if (cfg.mode === 'stored' && (await store.isConfigured())) {
+    return { apiTokenConfigured: true, apiTokenSource: 'stored' };
+  }
+  return { apiTokenConfigured: false, apiTokenSource: 'none' };
+}
+
+/**
+ * Registra el guard de autenticación por Bearer token. La configuración sale de
+ * `resolveAuthConfig` (ver auth-config.ts):
+ *   - `disabled` → sin auth (solo desarrollo).
+ *   - `env`      → exige `TAMAYA_API_TOKEN`; con `allowStoredToken` acepta además
+ *                  el token antiguo guardado en BD (migración).
+ *   - `stored`   → solo desarrollo: API abierta hasta generar un token desde
+ *                  Ajustes, y entonces exige ese.
+ */
+export function registerAuth(
+  app: FastifyInstance,
+  cfg: AuthConfig,
+  store: StoredTokenStore = defaultStore,
+): void {
+  current = cfg;
+  if (cfg.mode === 'disabled') {
+    app.log.warn('API_AUTH_DISABLED=true — autenticación DESACTIVADA (solo desarrollo)');
+  } else if (cfg.mode === 'stored') {
+    app.log.warn('TAMAYA_DEV_TOKEN_BOOTSTRAP=true — token guardado en BD (solo desarrollo)');
+  } else if (cfg.allowStoredToken) {
+    app.log.warn('TAMAYA_ALLOW_STORED_TOKEN=true — se acepta también el token antiguo guardado en BD (transitorio)');
   }
 
   app.addHook('onRequest', async (req, reply) => {
-    if (disabled) return;
+    if (cfg.mode === 'disabled') return;
 
     const path = req.url.split('?')[0];
-    if (isPublicRoute(req.method, path)) return;
+    if (isPublicRoute(req.method, path, cfg.docsPublic)) return;
 
-    // Sin token configurado → API abierta (bootstrap + primer arranque).
-    if (!(await isApiTokenConfigured())) return;
+    // Modo desarrollo con bootstrap: sin token guardado todavía → API abierta.
+    if (cfg.mode === 'stored' && !(await store.isConfigured())) return;
 
     const provided = extractToken(req);
     if (!provided) {
@@ -62,7 +110,11 @@ export function registerAuth(app: FastifyInstance): void {
         code: 'API_TOKEN_MISSING',
       });
     }
-    if (!(await verifyApiToken(provided))) {
+
+    let ok = false;
+    if (cfg.mode === 'env' && cfg.envToken) ok = tokensMatch(provided, cfg.envToken);
+    if (!ok && cfg.allowStoredToken) ok = await store.verify(provided);
+    if (!ok) {
       return reply.code(401).send({
         error: 'API token inválido',
         code: 'API_TOKEN_INVALID',
